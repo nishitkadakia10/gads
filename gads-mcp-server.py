@@ -573,9 +573,9 @@ async def create_campaign_sheet(
     conversation_id: str = Field(description="Conversation ID"),
     campaign_title: str = Field(description="Campaign title"),
     total_budget: float = Field(description="Total budget"),
-    campaign_type: str = Field(default="SEARCH", description="Campaign type"),
     start_date: str = Field(description="Start date YYYYMMDD"),
-    end_date: str = Field(description="End date YYYYMMDD")
+    end_date: str = Field(description="End date YYYYMMDD"),
+    campaign_type: str = Field(default="SEARCH", description="Campaign type"),
 ) -> Dict:
     """
     Create a Google Sheet with campaign data.
@@ -584,9 +584,9 @@ async def create_campaign_sheet(
         conversation_id: The conversation ID with keywords and ad copy
         campaign_title: Title for the campaign
         total_budget: Total budget for the campaign
-        campaign_type: Type of campaign (SEARCH, DISPLAY, etc.)
         start_date: Start date in YYYYMMDD format
         end_date: End date in YYYYMMDD format
+        campaign_type: Type of campaign (SEARCH, DISPLAY, etc.)
     
     Returns:
         Sheet URL and campaign summary
@@ -668,9 +668,9 @@ async def launch_campaign(
     customer_id: str = Field(description="Google Ads customer ID"),
     campaign_title: str = Field(description="Campaign title"),
     total_budget: float = Field(description="Total budget"),
-    campaign_type: str = Field(default="SEARCH", description="Campaign type"),
     start_date: str = Field(description="Start date YYYYMMDD"),
     end_date: str = Field(description="End date YYYYMMDD"),
+    campaign_type: str = Field(default="SEARCH", description="Campaign type"),
     location: str = Field(default="United States", description="Target location"),
     location_type: str = Field(default="Country", description="Location type")
 ) -> Dict:
@@ -682,9 +682,9 @@ async def launch_campaign(
         customer_id: Google Ads customer ID (10 digits, can include dashes)
         campaign_title: Campaign title
         total_budget: Total budget
-        campaign_type: Campaign type
         start_date: Start date YYYYMMDD
         end_date: End date YYYYMMDD
+        campaign_type: Campaign type
         location: Target location
         location_type: Location type
     
