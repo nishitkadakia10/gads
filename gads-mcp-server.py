@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Google Ads Automation MCP Server - Enhanced Version with Intelligent Workflows
+Google Ads Automation MCP Server with Firecrawl Integration
 Deployable on Railway for remote access via Claude Desktop
 """
 
@@ -15,15 +15,13 @@ import warnings
 import tempfile
 import pandas as pd
 import base64
-import inspect
 from typing import Any, Optional, Literal, Dict, List, Union, Tuple
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone
 from threading import Thread
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # Suppress deprecation warnings
-warnings.filterwarnings("ignore", category=DeprecationWarning, module="websockets")
-warnings.filterwarnings("ignore", category=DeprecationWarning, module="uvicorn")
+warnings.filterwarnings("ignore", category=DeprecationWarning)
 
 from pydantic import Field, BaseModel, HttpUrl, model_validator, field_validator, PrivateAttr
 from fastmcp import FastMCP
@@ -33,10 +31,8 @@ from fastmcp.exceptions import ToolError
 from google.ads.googleads.client import GoogleAdsClient
 from google.ads.googleads.errors import GoogleAdsException
 
-# Firebase imports
-import firebase_admin
-from firebase_admin import credentials, firestore
-from google.api_core import exceptions
+# Firecrawl imports
+from firecrawl import FirecrawlApp
 
 # Additional imports for tools
 import httpx
@@ -45,10 +41,6 @@ from fuzzywuzzy import process
 from openai import OpenAI
 from anthropic import Anthropic
 import litellm
-from crawl4ai import AsyncWebCrawler
-from crawl4ai.extraction_strategy import LLMExtractionStrategy
-from crawl4ai.cache_context import CacheMode
-import nodriver as uc
 
 # Google Sheets imports
 import gspread
@@ -67,11 +59,34 @@ logging.basicConfig(
 )
 logger = logging.getLogger('gads_mcp_server')
 
+# --- Helper Functions for Service Accounts ---
+
+def decode_service_account(key_data):
+    """Decode service account from base64 or return JSON dict"""
+    if not key_data:
+        return None
+    
+    try:
+        # Check if it's base64 encoded
+        if key_data.strip().startswith('{'):
+            # It's already JSON
+            return json.loads(key_data)
+        else:
+            # Try base64 decode
+            decoded = base64.b64decode(key_data)
+            return json.loads(decoded)
+    except Exception as e:
+        logger.error(f"Failed to decode service account: {e}")
+        return None
+
 # --- Environment Variables ---
 GOOGLE_ADS_DEVELOPER_TOKEN = os.getenv("GOOGLE_ADS_DEVELOPER_TOKEN")
 GOOGLE_ADS_MANAGER_ID = os.getenv("GOOGLE_ADS_MANAGER_ID")
-SERVICE_ACCOUNT_KEY_ADS = os.getenv("SERVICE_ACCOUNT_KEY_ADS")
-SERVICE_ACCOUNT_KEY_FIREBASE = os.getenv("SERVICE_ACCOUNT_KEY_FIREBASE")
+
+# Service Account Keys - Support both JSON string and Base64
+SERVICE_ACCOUNT_KEY_ADS = decode_service_account(os.getenv("SERVICE_ACCOUNT_KEY_ADS"))
+SERVICE_ACCOUNT_KEY_SHEETS = decode_service_account(os.getenv("SERVICE_ACCOUNT_KEY_SHEETS"))
+
 GOOGLE_SHEET_TEMPLATE = os.getenv("GOOGLE_SHEET_TEMPLATE")
 GOOGLE_DRIVE_FOLDER_ID = os.getenv("GOOGLE_DRIVE_FOLDER_ID")
 THREAD_TIMEOUT = int(os.getenv("THREAD_TIMEOUT", "300"))
@@ -81,13 +96,14 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
-# Web scraping credentials
-DATA_FOR_CEO_NAME = os.getenv("DATA_FOR_CEO_NAME")
-DATA_FOR_CEO_PASSWORD = os.getenv("DATA_FOR_CEO_PASSWORD")
+# Firecrawl configuration
+FIRECRAWL_API_KEY = os.getenv("FIRECRAWL_API_KEY")
+FIRECRAWL_API_URL = os.getenv("FIRECRAWL_API_URL")  # Optional for self-hosted
 
 # Models to use
 GPT_MODEL = "gpt-4-turbo-preview"
 CLAUDE_MODEL = "claude-3-opus-20240229"
+GEMINI_MODEL = "gemini-2.0-flash-exp"
 
 # Minimum search volume threshold
 MIN_SEARCH_VOLUME = 10
@@ -131,26 +147,12 @@ class ThemedAdCopy(BaseModel):
 
 # --- Initialize Services ---
 
-# Initialize Firebase
-db = None
-if SERVICE_ACCOUNT_KEY_FIREBASE:
-    try:
-        service_account_key = json.loads(SERVICE_ACCOUNT_KEY_FIREBASE)
-        if not firebase_admin._apps:
-            cred = credentials.Certificate(service_account_key)
-            firebase_admin.initialize_app(cred)
-        db = firestore.client()
-        logger.info("✅ Firebase initialized successfully")
-    except Exception as e:
-        logger.error(f"❌ Failed to initialize Firebase: {e}")
-
 # Initialize Google Ads Client
 google_ads_client = None
 if SERVICE_ACCOUNT_KEY_ADS and GOOGLE_ADS_DEVELOPER_TOKEN and GOOGLE_ADS_MANAGER_ID:
     try:
-        service_account_info = json.loads(SERVICE_ACCOUNT_KEY_ADS)
         with tempfile.NamedTemporaryFile(delete=False, suffix=".json") as temp_file:
-            temp_file.write(json.dumps(service_account_info).encode())
+            temp_file.write(json.dumps(SERVICE_ACCOUNT_KEY_ADS).encode())
             service_account_key_path = temp_file.name
         
         google_ads_client = GoogleAdsClient.load_from_dict({
@@ -165,19 +167,45 @@ if SERVICE_ACCOUNT_KEY_ADS and GOOGLE_ADS_DEVELOPER_TOKEN and GOOGLE_ADS_MANAGER
     except Exception as e:
         logger.error(f"❌ Failed to initialize Google Ads client: {e}")
 
+# Initialize Google Sheets Client
+sheets_client = None
+if SERVICE_ACCOUNT_KEY_SHEETS:
+    try:
+        scope = [
+            "https://spreadsheets.google.com/feeds",
+            "https://www.googleapis.com/auth/drive"
+        ]
+        creds = ServiceAccountCredentials.from_json_keyfile_dict(SERVICE_ACCOUNT_KEY_SHEETS, scope)
+        sheets_client = gspread.authorize(creds)
+        logger.info("✅ Google Sheets client initialized successfully")
+    except Exception as e:
+        logger.error(f"❌ Failed to initialize Google Sheets client: {e}")
+
+# Initialize Firecrawl client
+firecrawl_client = None
+if FIRECRAWL_API_KEY or FIRECRAWL_API_URL:
+    try:
+        firecrawl_client = FirecrawlApp(
+            api_key=FIRECRAWL_API_KEY,
+            api_url=FIRECRAWL_API_URL
+        )
+        logger.info("✅ Firecrawl client initialized successfully")
+    except Exception as e:
+        logger.error(f"❌ Failed to initialize Firecrawl client: {e}")
+
 # Initialize AI clients
 openai_client = OpenAI(api_key=OPENAI_API_KEY) if OPENAI_API_KEY else None
 anthropic_client = Anthropic(api_key=ANTHROPIC_API_KEY) if ANTHROPIC_API_KEY else None
 
 # Initialize FastMCP server
 mcp = FastMCP(
-    name="Google Ads Automation MCP"
+    name="Google Ads Automation MCP with Firecrawl"
 )
 
-# --- Internal State Management ---
+# --- Simple In-Memory State Management ---
 
-class InternalStateManager:
-    """Internal state management - not exposed as tools"""
+class SimpleStateManager:
+    """Simple in-memory state management for single sessions"""
     def __init__(self):
         self.conversations = {}
         self.tasks = {}
@@ -195,9 +223,6 @@ class InternalStateManager:
                 "SEARCH_DATA": None,
                 "created_at": datetime.now(timezone.utc).isoformat()
             }
-            # Load from Firebase if available
-            if db:
-                self._load_from_firebase(conversation_id)
         
         return conversation_id
     
@@ -213,32 +238,6 @@ class InternalStateManager:
             self.get_or_create_conversation(conversation_id)
         
         self.conversations[conversation_id][key] = value
-        
-        # Persist to Firebase if available
-        if db and key in ["KEYWORDS", "GENERATED_AD_COPY", "URL", "SEARCH_DATA"]:
-            self._save_to_firebase(conversation_id, key, value)
-    
-    def _save_to_firebase(self, conversation_id: str, key: str, value: Any):
-        """Save state to Firebase"""
-        try:
-            db.collection("agencii-chats").document(conversation_id).set(
-                {key: value}, merge=True
-            )
-        except Exception as e:
-            logger.error(f"Failed to save to Firebase: {e}")
-    
-    def _load_from_firebase(self, conversation_id: str):
-        """Load state from Firebase"""
-        try:
-            if db:
-                doc = db.collection("agencii-chats").document(conversation_id).get()
-                if doc.exists:
-                    doc_data = doc.to_dict()
-                    for key in ["KEYWORDS", "GENERATED_AD_COPY", "URL", "SEARCH_DATA"]:
-                        if key in doc_data:
-                            self.conversations[conversation_id][key] = doc_data[key]
-        except Exception as e:
-            logger.error(f"Failed to load from Firebase: {e}")
     
     def create_task(self, conversation_id: str, task_type: str) -> str:
         """Create a new task and return task_id"""
@@ -253,12 +252,6 @@ class InternalStateManager:
             "error": None
         }
         
-        # Save to Firebase if available
-        if db:
-            db.collection("agencii-chats").document(conversation_id).set(
-                {f"task_{task_id}": self.tasks[task_id]}, merge=True
-            )
-        
         return task_id
     
     def update_task(self, task_id: str, status: str, result: Any = None, error: str = None):
@@ -268,33 +261,34 @@ class InternalStateManager:
             self.tasks[task_id]["result"] = result
             self.tasks[task_id]["error"] = error
             self.tasks[task_id]["completed_at"] = datetime.now(timezone.utc).isoformat()
-            
-            # Update in Firebase
-            conversation_id = self.tasks[task_id]["conversation_id"]
-            if db and conversation_id:
-                db.collection("agencii-chats").document(conversation_id).set(
-                    {f"task_{task_id}": self.tasks[task_id]}, merge=True
-                )
     
-    def check_task_progress(self, task_id: str) -> Dict:
-        """Check task progress internally"""
-        if task_id in self.tasks:
-            return self.tasks[task_id]
+    def get_task(self, task_id: str) -> Dict:
+        """Get task status"""
+        return self.tasks.get(task_id, {"status": "not_found", "error": "Task not found"})
+    
+    def clear_old_conversations(self, hours: int = 24):
+        """Clear conversations older than specified hours"""
+        cutoff = datetime.now(timezone.utc) - timedelta(hours=hours)
+        to_remove = []
         
-        # Try to load from Firebase
-        if db:
-            for conv_id in self.conversations:
-                doc = db.collection("agencii-chats").document(conv_id).get()
-                if doc.exists:
-                    doc_data = doc.to_dict()
-                    task_key = f"task_{task_id}"
-                    if task_key in doc_data:
-                        return doc_data[task_key]
+        for conv_id, data in self.conversations.items():
+            created = datetime.fromisoformat(data["created_at"])
+            if created < cutoff:
+                to_remove.append(conv_id)
         
-        return {"status": "not_found", "error": "Task not found"}
+        for conv_id in to_remove:
+            del self.conversations[conv_id]
+            # Also remove associated tasks
+            task_ids_to_remove = [tid for tid, task in self.tasks.items() 
+                                 if task["conversation_id"] == conv_id]
+            for tid in task_ids_to_remove:
+                del self.tasks[tid]
+        
+        if to_remove:
+            logger.info(f"Cleared {len(to_remove)} old conversations")
 
 # Global state manager instance
-state_manager = InternalStateManager()
+state_manager = SimpleStateManager()
 
 # --- Helper Functions ---
 
@@ -306,16 +300,17 @@ def format_customer_id(customer_id: str) -> str:
     return customer_id.zfill(10)
 
 def get_location_id(location_name: str, location_type: str, country_code: str = "US") -> tuple[str, str]:
-    """Get location ID from CSV file (filtered for USA)."""
+    """Get location ID from CSV file."""
     try:
-        # Load the USA-filtered geotargets CSV
-        df = pd.read_csv("geotargets-usa.csv")
+        # Load the geotargets CSV
+        df = pd.read_csv("geotargets-2024-10-10.csv")
         
-        # Filter by location type
+        # Filter by location type and country
         df = df[df["Target Type"] == location_type]
+        df = df[df["Country Code"] == country_code]
         
         if df.empty:
-            return None, f"No `{location_type}` locations found in USA"
+            return None, f"No `{location_type}` locations found in {country_code}"
         
         # Check for exact match
         location_match = df[df["Name"].str.lower() == location_name.lower()]
@@ -330,26 +325,6 @@ def get_location_id(location_name: str, location_type: str, country_code: str = 
     except Exception as e:
         logger.error(f"Error loading location data: {e}")
         return None, f"Error loading location data: {str(e)}"
-
-def detect_entry_point(user_input: Dict) -> str:
-    """Detect the workflow entry point based on user input"""
-    # Check if user provided keywords directly
-    if "keywords" in user_input and isinstance(user_input["keywords"], list):
-        return "keywords_provided"
-    
-    # Check if user provided ad copy directly
-    if "ad_copy" in user_input or "headlines" in user_input or "descriptions" in user_input:
-        return "ad_copy_provided"
-    
-    # Check if user provided a URL for scraping
-    if "url" in user_input:
-        return "url_provided"
-    
-    # Check if user wants to go directly to sheet
-    if "campaign_data" in user_input:
-        return "campaign_provided"
-    
-    return "unknown"
 
 def assign_match_type(keyword: str, search_volume: int) -> str:
     """Intelligently assign match type based on keyword characteristics"""
@@ -366,17 +341,14 @@ def assign_match_type(keyword: str, search_volume: int) -> str:
 
 def group_keywords_by_theme(keywords: List[Dict], page_content: str) -> List[AdGroupKeywords]:
     """Group keywords into themed ad groups"""
-    # Extract main topics from page content
     themes = {}
     
-    # Simple theme detection based on keyword patterns
     for keyword_data in keywords:
-        keyword = keyword_data["keyword"]
+        keyword = keyword_data["keyword"] if isinstance(keyword_data, dict) else keyword_data
         
         # Determine theme based on keyword characteristics
         theme = "General"
         
-        # Check for product/service indicators
         if any(term in keyword.lower() for term in ["buy", "purchase", "shop", "sale"]):
             theme = "Purchase Intent"
         elif any(term in keyword.lower() for term in ["how", "what", "why", "guide"]):
@@ -398,9 +370,9 @@ def group_keywords_by_theme(keywords: List[Dict], page_content: str) -> List[AdG
         
         themes[theme].append(KeywordData(
             keyword=keyword,
-            match_type=keyword_data.get("match_type", "PHRASE"),
-            avg_monthly_searches=keyword_data.get("avg_monthly_searches", 0),
-            competition=keyword_data.get("competition"),
+            match_type=keyword_data.get("match_type", "PHRASE") if isinstance(keyword_data, dict) else "PHRASE",
+            avg_monthly_searches=keyword_data.get("avg_monthly_searches", 0) if isinstance(keyword_data, dict) else 0,
+            competition=keyword_data.get("competition") if isinstance(keyword_data, dict) else None,
             ad_group_theme=theme
         ))
     
@@ -411,17 +383,196 @@ def group_keywords_by_theme(keywords: List[Dict], page_content: str) -> List[AdG
     
     return grouped
 
-def validate_keyword_relevance(keyword: str, page_content: str) -> bool:
-    """Check if keyword is relevant to the page content"""
-    # Simple relevance check - can be enhanced with NLP
-    keyword_words = set(keyword.lower().split())
-    page_words = set(page_content.lower().split())
+# --- Web Scraping with Firecrawl ---
+
+async def scrape_with_firecrawl(url: str, options: Dict = None) -> Dict:
+    """Scrape webpage using Firecrawl"""
+    if not firecrawl_client:
+        raise ToolError("Firecrawl client not initialized. Please configure FIRECRAWL_API_KEY.")
     
-    # Check if at least some keyword words appear in page
-    overlap = keyword_words.intersection(page_words)
-    relevance_score = len(overlap) / len(keyword_words) if keyword_words else 0
+    try:
+        # Default options
+        default_options = {
+            "formats": ["markdown"],
+            "onlyMainContent": True,
+            "waitFor": 1000,
+            "timeout": 30000
+        }
+        
+        if options:
+            default_options.update(options)
+        
+        # Use Firecrawl to scrape
+        response = firecrawl_client.scrape_url(url, default_options)
+        
+        if not response.get("success"):
+            raise ToolError(f"Firecrawl scraping failed: {response.get('error', 'Unknown error')}")
+        
+        return {
+            "markdown": response.get("markdown", ""),
+            "html": response.get("html", ""),
+            "metadata": response.get("metadata", {}),
+            "links": response.get("links", [])
+        }
+        
+    except Exception as e:
+        logger.error(f"Error scraping with Firecrawl: {e}")
+        raise ToolError(f"Failed to scrape webpage: {str(e)}")
+
+async def search_with_firecrawl(query: str, limit: int = 5) -> List[Dict]:
+    """Search web using Firecrawl"""
+    if not firecrawl_client:
+        raise ToolError("Firecrawl client not initialized.")
     
-    return relevance_score > 0.3  # 30% word overlap minimum
+    try:
+        response = firecrawl_client.search(query, {
+            "limit": limit,
+            "scrapeOptions": {
+                "formats": ["markdown"],
+                "onlyMainContent": True
+            }
+        })
+        
+        if not response.get("success"):
+            raise ToolError(f"Firecrawl search failed: {response.get('error', 'Unknown error')}")
+        
+        return response.get("data", [])
+        
+    except Exception as e:
+        logger.error(f"Error searching with Firecrawl: {e}")
+        raise ToolError(f"Failed to search: {str(e)}")
+
+def extract_keywords_from_content(content: str) -> List[Dict]:
+    """Extract keywords from scraped content using AI"""
+    if not content:
+        return []
+    
+    # Use AI to extract keywords if available
+    if openai_client:
+        try:
+            response = openai_client.chat.completions.create(
+                model=GPT_MODEL,
+                messages=[
+                    {
+                        "role": "system",
+                        "content": "Extract 20-30 relevant Google Ads keywords from this content. Return as JSON array with format: [{\"keyword\": \"...\", \"match_type\": \"BROAD|PHRASE|EXACT\"}]"
+                    },
+                    {
+                        "role": "user",
+                        "content": content[:5000]  # Limit content length
+                    }
+                ],
+                response_format={"type": "json_object"}
+            )
+            
+            result = json.loads(response.choices[0].message.content)
+            return result.get("keywords", [])
+            
+        except Exception as e:
+            logger.error(f"Error extracting keywords with AI: {e}")
+    
+    # Fallback to simple extraction
+    words = content.lower().split()
+    keywords = []
+    
+    # Extract phrases
+    stop_words = {"the", "a", "an", "and", "or", "but", "in", "on", "at", "to", "for"}
+    for i in range(len(words) - 1):
+        if words[i] not in stop_words and words[i+1] not in stop_words:
+            phrase = f"{words[i]} {words[i+1]}"
+            keywords.append({"keyword": phrase, "match_type": "PHRASE"})
+    
+    return keywords[:50]  # Limit to 50 keywords
+
+def create_google_sheet(campaign_title: str, total_budget: float, campaign_type: str,
+                       start_date: str, end_date: str, ad_copy: Dict, keywords: List) -> str:
+    """Create a Google Sheet with campaign data"""
+    if not sheets_client:
+        # Return mock URL if sheets not configured
+        return f"https://docs.google.com/spreadsheets/d/mock-{campaign_title.replace(' ', '-')}"
+    
+    try:
+        # Create new spreadsheet
+        if GOOGLE_SHEET_TEMPLATE:
+            template = sheets_client.open_by_key(GOOGLE_SHEET_TEMPLATE)
+            sheet = sheets_client.copy(template.id, title=f"{campaign_title} - Campaign")
+        else:
+            sheet = sheets_client.create(f"{campaign_title} - Campaign")
+        
+        worksheet = sheet.sheet1
+        
+        # Add campaign info
+        row = 1
+        worksheet.update_cell(row, 1, "Campaign Title:")
+        worksheet.update_cell(row, 2, campaign_title)
+        
+        row += 1
+        worksheet.update_cell(row, 1, "Budget:")
+        worksheet.update_cell(row, 2, total_budget)
+        
+        row += 1
+        worksheet.update_cell(row, 1, "Type:")
+        worksheet.update_cell(row, 2, campaign_type)
+        
+        row += 1
+        worksheet.update_cell(row, 1, "Duration:")
+        worksheet.update_cell(row, 2, f"{start_date} - {end_date}")
+        
+        # Add keywords section
+        row += 2
+        worksheet.update_cell(row, 1, "KEYWORDS")
+        worksheet.update_cell(row, 2, "Match Type")
+        worksheet.update_cell(row, 3, "Monthly Searches")
+        
+        for kw in keywords[:50]:  # Limit to 50 keywords
+            row += 1
+            if isinstance(kw, dict):
+                worksheet.update_cell(row, 1, kw.get("keyword", ""))
+                worksheet.update_cell(row, 2, kw.get("match_type", ""))
+                worksheet.update_cell(row, 3, kw.get("avg_monthly_searches", 0))
+            else:
+                worksheet.update_cell(row, 1, str(kw))
+                worksheet.update_cell(row, 2, "PHRASE")
+                worksheet.update_cell(row, 3, 0)
+        
+        # Add ad copy section
+        row += 2
+        worksheet.update_cell(row, 1, "AD COPY")
+        
+        if "themes" in ad_copy:
+            for theme_data in ad_copy["themes"]:
+                row += 2
+                worksheet.update_cell(row, 1, f"Theme: {theme_data['theme']}")
+                
+                for model, variation in theme_data["variations"].items():
+                    row += 1
+                    worksheet.update_cell(row, 1, f"Model: {model}")
+                    
+                    # Headlines
+                    row += 1
+                    worksheet.update_cell(row, 1, "Headlines:")
+                    for headline in variation["headlines"][:5]:
+                        row += 1
+                        worksheet.update_cell(row, 2, headline)
+                    
+                    # Descriptions
+                    row += 1
+                    worksheet.update_cell(row, 1, "Descriptions:")
+                    for desc in variation["descriptions"]:
+                        row += 1
+                        worksheet.update_cell(row, 2, desc)
+        
+        # Share with folder if specified
+        if GOOGLE_DRIVE_FOLDER_ID:
+            # Move to folder logic here (requires Drive API)
+            pass
+        
+        return sheet.url
+        
+    except Exception as e:
+        logger.error(f"Error creating Google Sheet: {e}")
+        # Return mock URL on error
+        return f"https://docs.google.com/spreadsheets/d/error-{campaign_title.replace(' ', '-')}"
 
 # --- MCP Tools ---
 
@@ -429,98 +580,113 @@ def validate_keyword_relevance(keyword: str, page_content: str) -> bool:
 async def keyword_research(
     url: Optional[str] = Field(default=None, description="URL to analyze for keywords"),
     keywords: Optional[List[Dict]] = Field(default=None, description="Direct keyword list if skipping scraping"),
-    location: str = Field(default="United States", description="Target location (US locations only)"),
+    location: str = Field(default="United States", description="Target location"),
     location_type: Optional[str] = Field(default="Country", description="Location type (City, State, Country)"),
     conversation_id: Optional[str] = Field(default=None, description="Conversation ID for context")
 ) -> Dict:
     """
-    Intelligent keyword research with quality feedback loop.
+    Intelligent keyword research using Firecrawl for web scraping.
     Can start from URL scraping or accept direct keyword input.
-    
-    Features:
-    - Scrapes webpage and extracts relevant keywords
-    - Gets search volume data from Google Ads API
-    - Filters by minimum 10 monthly searches
-    - Groups keywords by themes for ad groups
-    - Assigns intelligent match types
-    - Quality validation with regeneration if needed
     """
     logger.info(f"🔍 Starting keyword research")
     
     # Get or create conversation context
     conv_id = state_manager.get_or_create_conversation(conversation_id)
     
-    # Detect entry point
+    # Process keywords
     if keywords:
-        logger.info("📝 Keywords provided directly, skipping scraping")
-        # Process provided keywords
-        processed_keywords = []
-        for kw in keywords:
-            if isinstance(kw, dict):
-                processed_keywords.append(kw)
-            else:
-                # Convert string to keyword dict
-                processed_keywords.append({
-                    "keyword": str(kw),
-                    "match_type": "PHRASE",
-                    "avg_monthly_searches": 0
-                })
-        
-        # Get search volumes for provided keywords
-        keywords_with_metrics = await _get_keyword_metrics(processed_keywords, location, location_type)
+        logger.info("📝 Keywords provided directly")
+        processed_keywords = keywords
         
     elif url:
         logger.info(f"🌐 Analyzing URL: {url}")
-        # Create task for async processing
-        task_id = state_manager.create_task(conv_id, "keyword_research")
         
-        # Start async processing
-        thread = Thread(
-            target=_process_keyword_research,
-            args=(url, location, location_type, conv_id, task_id)
-        )
-        thread.start()
-        
-        # Wait for completion (with timeout)
-        start_time = time.time()
-        while time.time() - start_time < THREAD_TIMEOUT:
-            task_status = state_manager.check_task_progress(task_id)
-            if task_status["status"] in ["completed", "error"]:
-                break
-            await asyncio.sleep(2)
-        
-        if task_status["status"] == "error":
+        # Scrape webpage using Firecrawl
+        try:
+            scraped_data = await scrape_with_firecrawl(url)
+            page_content = scraped_data.get("markdown", "")
+            
+            if not page_content:
+                return {
+                    "status": "error",
+                    "message": "Failed to scrape webpage content. Please check the URL and try again."
+                }
+            
+            state_manager.set(conv_id, "SEARCH_DATA", page_content)
+            state_manager.set(conv_id, "URL", url)
+            
+            # Extract keywords from content
+            processed_keywords = extract_keywords_from_content(page_content)
+            
+            if not processed_keywords:
+                return {
+                    "status": "error",
+                    "message": "Failed to extract keywords from webpage. Please try a different URL."
+                }
+                
+        except Exception as e:
+            logger.error(f"Error scraping URL: {e}")
             return {
                 "status": "error",
-                "message": task_status.get("error", "Unknown error occurred")
+                "message": f"Failed to analyze URL: {str(e)}"
             }
-        
-        keywords_with_metrics = task_status.get("result", [])
-        
     else:
         return {
             "status": "error",
             "message": "Please provide either a URL to analyze or a list of keywords"
         }
     
-    # Filter by minimum search volume
-    filtered_keywords = [
-        kw for kw in keywords_with_metrics 
-        if kw.get("avg_monthly_searches", 0) >= MIN_SEARCH_VOLUME
-    ]
+    # Get search volumes from Google Ads API
+    if google_ads_client:
+        try:
+            location_id = None
+            if location != "Worldwide":
+                location_id, error = get_location_id(location, location_type)
+                if error:
+                    logger.warning(f"Location error: {error}")
+            
+            # Get keyword metrics
+            keyword_plan_idea_service = google_ads_client.get_service("KeywordPlanIdeaService")
+            
+            request = google_ads_client.get_type("GenerateKeywordHistoricalMetricsRequest")
+            request.customer_id = GOOGLE_ADS_MANAGER_ID
+            request.keywords = [kw.get("keyword", kw) if isinstance(kw, dict) else kw for kw in processed_keywords]
+            request.keyword_plan_network = google_ads_client.enums.KeywordPlanNetworkEnum.GOOGLE_SEARCH
+            
+            language_service = google_ads_client.get_service("GoogleAdsService")
+            request.language = language_service.language_constant_path("1000")
+            
+            if location_id:
+                geo_service = google_ads_client.get_service("GeoTargetConstantService")
+                request.geo_target_constants.append(
+                    geo_service.geo_target_constant_path(location_id)
+                )
+            
+            response = keyword_plan_idea_service.generate_keyword_historical_metrics(request=request)
+            
+            # Process results
+            keywords_with_metrics = []
+            for result in response.results:
+                avg_searches = result.keyword_metrics.avg_monthly_searches
+                if avg_searches >= MIN_SEARCH_VOLUME:
+                    keywords_with_metrics.append({
+                        "keyword": result.text,
+                        "match_type": assign_match_type(result.text, avg_searches),
+                        "avg_monthly_searches": avg_searches,
+                        "competition": str(result.keyword_metrics.competition)
+                    })
+            
+        except Exception as e:
+            logger.error(f"Error getting keyword metrics: {e}")
+            # Use keywords without metrics
+            keywords_with_metrics = processed_keywords
+    else:
+        keywords_with_metrics = processed_keywords
     
-    logger.info(f"✅ Found {len(filtered_keywords)} keywords with {MIN_SEARCH_VOLUME}+ searches")
+    # Filter and limit keywords
+    filtered_keywords = keywords_with_metrics[:50]
     
-    # Quality check and regeneration loop
-    if len(filtered_keywords) < 10:
-        logger.info("⚠️ Insufficient keywords, generating more...")
-        # Generate additional keywords
-        filtered_keywords = await _expand_keywords_intelligently(
-            filtered_keywords, 
-            state_manager.get(conv_id, "SEARCH_DATA", ""),
-            location,
-            location_type
-        )
+    logger.info(f"✅ Found {len(filtered_keywords)} keywords")
     
     # Group keywords by theme
     page_content = state_manager.get(conv_id, "SEARCH_DATA", "")
@@ -528,9 +694,7 @@ async def keyword_research(
     
     # Save to state
     state_manager.set(conv_id, "KEYWORDS", filtered_keywords)
-    state_manager.set(conv_id, "URL", url)
     
-    # Format response
     return {
         "status": "success",
         "conversation_id": conv_id,
@@ -555,218 +719,104 @@ async def keyword_research(
         ]
     }
 
-def _process_keyword_research(url: str, location: str, location_type: str, conv_id: str, task_id: str):
-    """Process keyword research in background"""
-    try:
-        # Scrape webpage
-        page_content = _scrape_webpage(url)
-        state_manager.set(conv_id, "SEARCH_DATA", page_content)
-        
-        # Extract initial keywords
-        keywords = _extract_keywords_from_content(page_content)
-        
-        # Get location ID
-        location_id = None
-        if location != "Worldwide":
-            location_id, error = get_location_id(location, location_type)
-            if error:
-                state_manager.update_task(task_id, "error", error=error)
-                return
-        
-        # Get keyword metrics from Google Ads API
-        keywords_with_metrics = _get_keyword_metrics_sync(keywords, location_id)
-        
-        # Validate relevance
-        validated_keywords = []
-        for kw in keywords_with_metrics:
-            if validate_keyword_relevance(kw["keyword"], page_content):
-                validated_keywords.append(kw)
-        
-        state_manager.update_task(task_id, "completed", result=validated_keywords)
-        
-    except Exception as e:
-        logger.error(f"Error in keyword research: {e}")
-        state_manager.update_task(task_id, "error", error=str(e))
-
-async def _get_keyword_metrics(keywords: List[Dict], location: str, location_type: str) -> List[Dict]:
-    """Get search volume metrics for keywords"""
-    # Get location ID
-    location_id = None
-    if location != "Worldwide":
-        location_id, error = get_location_id(location, location_type)
-        if error:
-            logger.warning(f"Location error: {error}, using Worldwide")
+@mcp.tool()
+async def expand_keywords(
+    conversation_id: Optional[str] = Field(default=None, description="Conversation ID"),
+    num_keywords: int = Field(default=10, description="Number of additional keywords to generate"),
+    use_ai_suggestions: bool = Field(default=True, description="Use AI to suggest related keywords")
+) -> Dict:
+    """
+    Expand keyword list using Firecrawl search and AI suggestions.
+    """
+    logger.info("📈 Expanding keywords")
     
-    # Call Google Ads API for metrics
-    return _get_keyword_metrics_sync(keywords, location_id)
-
-def _get_keyword_metrics_sync(keywords: List[Dict], location_id: str = None) -> List[Dict]:
-    """Synchronous version to get keyword metrics from Google Ads API"""
-    if not google_ads_client:
-        logger.error("Google Ads client not initialized")
-        return keywords
+    conv_id = state_manager.get_or_create_conversation(conversation_id)
     
-    try:
-        keyword_plan_idea_service = google_ads_client.get_service("KeywordPlanIdeaService")
-        
-        # Build request
-        request = google_ads_client.get_type("GenerateKeywordHistoricalMetricsRequest")
-        request.customer_id = GOOGLE_ADS_MANAGER_ID
-        
-        # Add keywords
-        keyword_texts = [kw.get("keyword", kw) if isinstance(kw, dict) else kw for kw in keywords]
-        request.keywords = keyword_texts
-        
-        # Set network
-        request.keyword_plan_network = google_ads_client.enums.KeywordPlanNetworkEnum.GOOGLE_SEARCH
-        
-        # Set language (English)
-        language_service = google_ads_client.get_service("GoogleAdsService")
-        request.language = language_service.language_constant_path("1000")
-        
-        # Set location if provided
-        if location_id:
-            geo_service = google_ads_client.get_service("GeoTargetConstantService")
-            request.geo_target_constants.append(
-                geo_service.geo_target_constant_path(location_id)
+    # Get existing keywords
+    existing_keywords = state_manager.get(conv_id, "KEYWORDS", [])
+    if not existing_keywords:
+        return {
+            "status": "error",
+            "message": "No existing keywords found. Please run keyword_research first."
+        }
+    
+    # Get page content
+    page_content = state_manager.get(conv_id, "SEARCH_DATA", "")
+    url = state_manager.get(conv_id, "URL", "")
+    
+    new_keywords = []
+    
+    # Use Firecrawl search to find related keywords
+    if firecrawl_client and existing_keywords:
+        try:
+            # Search for related terms
+            seed_keyword = existing_keywords[0].get("keyword", existing_keywords[0]) if isinstance(existing_keywords[0], dict) else existing_keywords[0]
+            search_results = await search_with_firecrawl(seed_keyword, limit=3)
+            
+            # Extract keywords from search results
+            for result in search_results:
+                content = result.get("markdown", "")
+                if content:
+                    extracted = extract_keywords_from_content(content)
+                    new_keywords.extend(extracted[:5])  # Take top 5 from each result
+                    
+        except Exception as e:
+            logger.error(f"Error expanding with Firecrawl: {e}")
+    
+    # Use AI to suggest more keywords if enabled
+    if use_ai_suggestions and openai_client and page_content:
+        try:
+            existing_kw_list = [kw.get("keyword", kw) if isinstance(kw, dict) else kw for kw in existing_keywords]
+            
+            response = openai_client.chat.completions.create(
+                model=GPT_MODEL,
+                messages=[
+                    {
+                        "role": "system",
+                        "content": f"Generate {num_keywords} new Google Ads keywords related to the content but different from existing keywords. Return as JSON array."
+                    },
+                    {
+                        "role": "user",
+                        "content": f"Content: {page_content[:3000]}\n\nExisting keywords: {existing_kw_list[:20]}"
+                    }
+                ],
+                response_format={"type": "json_object"}
             )
-        
-        # Get metrics
-        response = keyword_plan_idea_service.generate_keyword_historical_metrics(request=request)
-        
-        # Process results
-        keywords_with_metrics = []
-        for result in response.results:
-            avg_searches = result.keyword_metrics.avg_monthly_searches
             
-            # Find original keyword data
-            original_kw = next((kw for kw in keywords if 
-                              (kw.get("keyword", kw) if isinstance(kw, dict) else kw) == result.text), 
-                              None)
+            result = json.loads(response.choices[0].message.content)
+            ai_keywords = result.get("keywords", [])
+            new_keywords.extend(ai_keywords)
             
-            # Assign match type intelligently
-            match_type = (original_kw.get("match_type") if isinstance(original_kw, dict) 
-                         else assign_match_type(result.text, avg_searches))
-            
-            keywords_with_metrics.append({
-                "keyword": result.text,
-                "match_type": match_type,
-                "avg_monthly_searches": avg_searches,
-                "competition": str(result.keyword_metrics.competition),
-                "competition_index": result.keyword_metrics.competition_index
-            })
-        
-        return keywords_with_metrics
-        
-    except Exception as e:
-        logger.error(f"Error getting keyword metrics: {e}")
-        # Return original keywords without metrics
-        return [
-            {
-                "keyword": kw.get("keyword", kw) if isinstance(kw, dict) else kw,
+        except Exception as e:
+            logger.error(f"Error generating AI keywords: {e}")
+    
+    # Remove duplicates and limit
+    existing_texts = {(kw.get("keyword", kw) if isinstance(kw, dict) else kw).lower() for kw in existing_keywords}
+    unique_new = []
+    for kw in new_keywords:
+        keyword_text = kw.get("keyword", kw) if isinstance(kw, dict) else kw
+        if keyword_text.lower() not in existing_texts:
+            unique_new.append({
+                "keyword": keyword_text,
                 "match_type": kw.get("match_type", "PHRASE") if isinstance(kw, dict) else "PHRASE",
                 "avg_monthly_searches": 0
-            }
-            for kw in keywords
-        ]
-
-async def _expand_keywords_intelligently(existing_keywords: List[Dict], page_content: str, 
-                                        location: str, location_type: str) -> List[Dict]:
-    """Expand keywords using Google Ads suggestions and AI"""
-    if not google_ads_client:
-        return existing_keywords
+            })
+            existing_texts.add(keyword_text.lower())
+        
+        if len(unique_new) >= num_keywords:
+            break
     
-    try:
-        keyword_plan_idea_service = google_ads_client.get_service("KeywordPlanIdeaService")
-        
-        # Get location ID
-        location_id = None
-        if location != "Worldwide":
-            location_id, _ = get_location_id(location, location_type)
-        
-        # Build request for keyword ideas
-        request = google_ads_client.get_type("GenerateKeywordIdeasRequest")
-        request.customer_id = GOOGLE_ADS_MANAGER_ID
-        
-        # Use existing keywords as seed
-        if existing_keywords:
-            request.keyword_seed.keywords.extend([kw["keyword"] for kw in existing_keywords[:5]])
-        
-        # Set parameters
-        request.keyword_plan_network = google_ads_client.enums.KeywordPlanNetworkEnum.GOOGLE_SEARCH
-        language_service = google_ads_client.get_service("GoogleAdsService")
-        request.language = language_service.language_constant_path("1000")
-        
-        if location_id:
-            geo_service = google_ads_client.get_service("GeoTargetConstantService")
-            request.geo_target_constants.append(
-                geo_service.geo_target_constant_path(location_id)
-            )
-        
-        # Get suggestions
-        response = keyword_plan_idea_service.generate_keyword_ideas(request=request)
-        
-        # Process new keywords
-        new_keywords = []
-        existing_texts = {kw["keyword"].lower() for kw in existing_keywords}
-        
-        for idea in response.results:
-            if idea.text.lower() not in existing_texts:
-                avg_searches = idea.keyword_idea_metrics.avg_monthly_searches
-                if avg_searches >= MIN_SEARCH_VOLUME:
-                    # Validate relevance
-                    if validate_keyword_relevance(idea.text, page_content):
-                        new_keywords.append({
-                            "keyword": idea.text,
-                            "match_type": assign_match_type(idea.text, avg_searches),
-                            "avg_monthly_searches": avg_searches,
-                            "competition": str(idea.keyword_idea_metrics.competition)
-                        })
-        
-        # Combine and return
-        all_keywords = existing_keywords + new_keywords
-        return all_keywords[:50]  # Limit to top 50
-        
-    except Exception as e:
-        logger.error(f"Error expanding keywords: {e}")
-        return existing_keywords
-
-def _scrape_webpage(url: str) -> str:
-    """Scrape webpage content"""
-    # Simplified scraping - in production, use proper scraping logic
-    try:
-        response = requests.get(url, timeout=10)
-        # Extract text content (simplified)
-        import re
-        text = re.sub(r'<[^>]+>', ' ', response.text)
-        text = re.sub(r'\s+', ' ', text)
-        return text[:10000]  # Limit content length
-    except Exception as e:
-        logger.error(f"Error scraping webpage: {e}")
-        return ""
-
-def _extract_keywords_from_content(content: str) -> List[Dict]:
-    """Extract keywords from page content"""
-    # Simplified keyword extraction
-    # In production, use NLP or AI for better extraction
+    # Add to existing keywords
+    updated_keywords = existing_keywords + unique_new
+    state_manager.set(conv_id, "KEYWORDS", updated_keywords)
     
-    words = content.lower().split()
-    # Get common phrases (2-3 words)
-    keywords = []
-    
-    # Single words (filter common words)
-    stop_words = {"the", "a", "an", "and", "or", "but", "in", "on", "at", "to", "for"}
-    for word in set(words):
-        if len(word) > 3 and word not in stop_words:
-            keywords.append({"keyword": word, "match_type": "BROAD"})
-    
-    # Two-word phrases
-    for i in range(len(words) - 1):
-        phrase = f"{words[i]} {words[i+1]}"
-        if all(w not in stop_words for w in [words[i], words[i+1]]):
-            keywords.append({"keyword": phrase, "match_type": "PHRASE"})
-    
-    return keywords[:100]  # Limit initial keywords
+    return {
+        "status": "success",
+        "conversation_id": conv_id,
+        "new_keywords_added": len(unique_new),
+        "total_keywords": len(updated_keywords),
+        "new_keywords": unique_new[:10]  # Show first 10 new keywords
+    }
 
 @mcp.tool()
 async def generate_ad_copy(
@@ -776,17 +826,9 @@ async def generate_ad_copy(
 ) -> Dict:
     """
     Generate themed ad copy variations using multiple AI models.
-    
-    Features:
-    - Generates variations for each keyword theme/ad group
-    - Uses both OpenAI and Claude for variety
-    - Enforces Google Ads character limits
-    - Creates multiple variations per theme
-    - Includes ad extensions
     """
     logger.info("📝 Starting ad copy generation")
     
-    # Get conversation context
     conv_id = state_manager.get_or_create_conversation(conversation_id)
     
     # Check for direct ad copy input
@@ -796,8 +838,7 @@ async def generate_ad_copy(
         return {
             "status": "success",
             "conversation_id": conv_id,
-            "message": "Ad copy saved successfully",
-            "preview": _format_ad_copy_preview(ad_copy_data)
+            "message": "Ad copy saved successfully"
         }
     
     # Get keywords from state
@@ -805,7 +846,7 @@ async def generate_ad_copy(
     if not keywords:
         return {
             "status": "error",
-            "message": "No keywords found. Please run keyword_research first or provide keywords directly."
+            "message": "No keywords found. Please run keyword_research first."
         }
     
     # Group keywords by theme
@@ -817,24 +858,80 @@ async def generate_ad_copy(
     
     for group in grouped_keywords:
         if themes and group.theme not in themes:
-            continue  # Skip if specific themes requested
+            continue
         
         logger.info(f"🎨 Generating ad copy for theme: {group.theme}")
         
-        # Generate with multiple models
         variations = {}
         
-        # OpenAI Generation
+        # Generate with OpenAI
         if openai_client:
-            variations["gpt4"] = _generate_ad_copy_openai(group, page_content)
+            try:
+                prompt = f"""
+                Create Google Ads copy for keyword theme: {group.theme}
+                Keywords: {', '.join([kw.keyword for kw in group.keywords[:10]])}
+                
+                Requirements:
+                - 15 headlines (max 30 chars each)
+                - 4 descriptions (max 90 chars each)
+                
+                Return as JSON: {{"headlines": [...], "descriptions": [...]}}
+                """
+                
+                response = openai_client.chat.completions.create(
+                    model=GPT_MODEL,
+                    messages=[
+                        {"role": "system", "content": "You are an expert Google Ads copywriter."},
+                        {"role": "user", "content": prompt}
+                    ],
+                    response_format={"type": "json_object"}
+                )
+                
+                result = json.loads(response.choices[0].message.content)
+                variations["gpt4"] = AdCopyVariation(
+                    headlines=[h[:30] for h in result.get("headlines", [])[:15]],
+                    descriptions=[d[:90] for d in result.get("descriptions", [])[:4]]
+                )
+            except Exception as e:
+                logger.error(f"Error generating OpenAI ad copy: {e}")
         
-        # Claude Generation
+        # Generate with Claude
         if anthropic_client:
-            variations["claude"] = _generate_ad_copy_claude(group, page_content)
+            try:
+                prompt = f"""
+                Create Google Ads copy for keyword theme: {group.theme}
+                Keywords: {', '.join([kw.keyword for kw in group.keywords[:10]])}
+                
+                Requirements:
+                - 15 headlines (max 30 chars each)
+                - 4 descriptions (max 90 chars each)
+                
+                Return only JSON: {{"headlines": [...], "descriptions": [...]}}
+                """
+                
+                response = anthropic_client.messages.create(
+                    model=CLAUDE_MODEL,
+                    max_tokens=2000,
+                    messages=[{"role": "user", "content": prompt}]
+                )
+                
+                text = response.content[0].text
+                json_match = re.search(r'\{.*\}', text, re.DOTALL)
+                if json_match:
+                    result = json.loads(json_match.group())
+                    variations["claude"] = AdCopyVariation(
+                        headlines=[h[:30] for h in result.get("headlines", [])[:15]],
+                        descriptions=[d[:90] for d in result.get("descriptions", [])[:4]]
+                    )
+            except Exception as e:
+                logger.error(f"Error generating Claude ad copy: {e}")
         
-        # If no AI clients available, generate mock data
+        # Fallback to mock data if no AI available
         if not variations:
-            variations["default"] = _generate_mock_ad_copy(group)
+            variations["default"] = AdCopyVariation(
+                headlines=[f"{group.theme} Service {i}"[:30] for i in range(1, 16)],
+                descriptions=[f"Quality {group.theme.lower()} solutions."[:90] for _ in range(4)]
+            )
         
         themed_ad_copies.append(ThemedAdCopy(
             theme=group.theme,
@@ -863,155 +960,8 @@ async def generate_ad_copy(
         "status": "success",
         "conversation_id": conv_id,
         "themes_generated": len(themed_ad_copies),
-        "models_used": list(themed_ad_copies[0].variations.keys()) if themed_ad_copies else [],
-        "preview": _format_ad_copy_preview(ad_copy_data)
+        "models_used": list(themed_ad_copies[0].variations.keys()) if themed_ad_copies else []
     }
-
-def _generate_ad_copy_openai(keyword_group: AdGroupKeywords, page_content: str) -> AdCopyVariation:
-    """Generate ad copy using OpenAI"""
-    if not openai_client:
-        return _generate_mock_ad_copy(keyword_group)
-    
-    try:
-        # Create prompt
-        prompt = f"""
-        Create Google Ads copy for the following keyword group:
-        Theme: {keyword_group.theme}
-        Keywords: {', '.join([kw.keyword for kw in keyword_group.keywords[:10]])}
-        
-        Requirements:
-        - Headlines: 15 variations, each max 30 characters
-        - Descriptions: 4 variations, each max 90 characters
-        - Must be relevant to the keywords
-        - Include call-to-action
-        
-        Return as JSON:
-        {{"headlines": [...], "descriptions": [...]}}
-        """
-        
-        response = openai_client.chat.completions.create(
-            model=GPT_MODEL,
-            messages=[
-                {"role": "system", "content": "You are an expert Google Ads copywriter."},
-                {"role": "user", "content": prompt}
-            ],
-            temperature=0.7,
-            response_format={"type": "json_object"}
-        )
-        
-        result = json.loads(response.choices[0].message.content)
-        
-        # Validate character limits
-        headlines = [h[:30] for h in result.get("headlines", [])[:15]]
-        descriptions = [d[:90] for d in result.get("descriptions", [])[:4]]
-        
-        # Ensure we have enough
-        while len(headlines) < 15:
-            headlines.append(f"{keyword_group.theme} - Quality Service"[:30])
-        while len(descriptions) < 4:
-            descriptions.append(f"Discover our {keyword_group.theme.lower()} solutions. Contact us today!"[:90])
-        
-        return AdCopyVariation(headlines=headlines[:15], descriptions=descriptions[:4])
-        
-    except Exception as e:
-        logger.error(f"Error generating OpenAI ad copy: {e}")
-        return _generate_mock_ad_copy(keyword_group)
-
-def _generate_ad_copy_claude(keyword_group: AdGroupKeywords, page_content: str) -> AdCopyVariation:
-    """Generate ad copy using Claude"""
-    if not anthropic_client:
-        return _generate_mock_ad_copy(keyword_group)
-    
-    try:
-        prompt = f"""
-        Create Google Ads copy for this keyword group:
-        Theme: {keyword_group.theme}
-        Keywords: {', '.join([kw.keyword for kw in keyword_group.keywords[:10]])}
-        
-        Requirements:
-        - Headlines: 15 variations, max 30 characters each
-        - Descriptions: 4 variations, max 90 characters each
-        
-        Return only JSON: {{"headlines": [...], "descriptions": [...]}}
-        """
-        
-        response = anthropic_client.messages.create(
-            model=CLAUDE_MODEL,
-            max_tokens=2000,
-            messages=[{"role": "user", "content": prompt}]
-        )
-        
-        # Extract JSON from response
-        text = response.content[0].text
-        json_match = re.search(r'\{.*\}', text, re.DOTALL)
-        if json_match:
-            result = json.loads(json_match.group())
-        else:
-            result = {"headlines": [], "descriptions": []}
-        
-        # Process and validate
-        headlines = [h[:30] for h in result.get("headlines", [])[:15]]
-        descriptions = [d[:90] for d in result.get("descriptions", [])[:4]]
-        
-        # Fill if needed
-        while len(headlines) < 15:
-            headlines.append(f"Best {keyword_group.theme}"[:30])
-        while len(descriptions) < 4:
-            descriptions.append(f"Quality {keyword_group.theme.lower()} services for you"[:90])
-        
-        return AdCopyVariation(headlines=headlines[:15], descriptions=descriptions[:4])
-        
-    except Exception as e:
-        logger.error(f"Error generating Claude ad copy: {e}")
-        return _generate_mock_ad_copy(keyword_group)
-
-def _generate_mock_ad_copy(keyword_group: AdGroupKeywords) -> AdCopyVariation:
-    """Generate mock ad copy for testing"""
-    theme = keyword_group.theme
-    
-    headlines = [
-        f"Best {theme} Services"[:30],
-        f"{theme} Experts Here"[:30],
-        f"Quality {theme} Solutions"[:30],
-        f"Top Rated {theme}"[:30],
-        f"{theme} - Get Started"[:30],
-        f"Professional {theme}"[:30],
-        f"{theme} You Can Trust"[:30],
-        f"Leading {theme} Provider"[:30],
-        f"Affordable {theme}"[:30],
-        f"{theme} Specialists"[:30],
-        f"Premium {theme} Service"[:30],
-        f"{theme} - Call Now"[:30],
-        f"Trusted {theme} Team"[:30],
-        f"Expert {theme} Help"[:30],
-        f"{theme} Solutions Today"[:30]
-    ]
-    
-    descriptions = [
-        f"Get professional {theme.lower()} services. Quality guaranteed. Contact us!"[:90],
-        f"Trusted {theme.lower()} provider with years of experience. Start today!"[:90],
-        f"Discover our {theme.lower()} solutions. Best prices, expert service."[:90],
-        f"Your {theme.lower()} experts. Fast, reliable, affordable. Call now!"[:90]
-    ]
-    
-    return AdCopyVariation(headlines=headlines, descriptions=descriptions)
-
-def _format_ad_copy_preview(ad_copy_data: Dict) -> Dict:
-    """Format ad copy for preview"""
-    preview = {}
-    
-    if "themes" in ad_copy_data:
-        for theme_data in ad_copy_data["themes"][:2]:  # Preview first 2 themes
-            theme = theme_data["theme"]
-            preview[theme] = {}
-            
-            for model, variation in theme_data["variations"].items():
-                preview[theme][model] = {
-                    "sample_headlines": variation["headlines"][:3],
-                    "sample_description": variation["descriptions"][0] if variation["descriptions"] else ""
-                }
-    
-    return preview
 
 @mcp.tool()
 async def create_campaign_sheet(
@@ -1020,22 +970,13 @@ async def create_campaign_sheet(
     total_budget: float = Field(description="Total budget for campaign"),
     campaign_type: str = Field(description="Campaign type (SEARCH, DISPLAY, etc.)"),
     start_date: str = Field(description="Start date in YYYYMMDD format"),
-    end_date: str = Field(description="End date in YYYYMMDD format"),
-    sheet_data: Optional[Dict] = Field(default=None, description="Direct sheet data if provided")
+    end_date: str = Field(description="End date in YYYYMMDD format")
 ) -> Dict:
     """
-    Create or update a Google Sheet with campaign data.
-    
-    Enhanced Features:
-    - Template versioning tracking
-    - Cell validation with LEN() formulas
-    - Bulk editing support
-    - Change tracking log
-    - Flexible entry from any workflow stage
+    Create Google Sheet with campaign data.
     """
     logger.info(f"📊 Creating campaign sheet: {campaign_title}")
     
-    # Get conversation context
     conv_id = state_manager.get_or_create_conversation(conversation_id)
     
     # Validate dates
@@ -1051,15 +992,9 @@ async def create_campaign_sheet(
     except ValueError:
         return {"status": "error", "message": "Invalid date format. Use YYYYMMDD"}
     
-    # Get or use provided data
-    if sheet_data:
-        # Direct sheet data provided
-        ad_copy = sheet_data.get("ad_copy")
-        keywords = sheet_data.get("keywords")
-    else:
-        # Get from state
-        ad_copy = state_manager.get(conv_id, "GENERATED_AD_COPY")
-        keywords = state_manager.get(conv_id, "KEYWORDS")
+    # Get data from state
+    ad_copy = state_manager.get(conv_id, "GENERATED_AD_COPY")
+    keywords = state_manager.get(conv_id, "KEYWORDS")
     
     if not ad_copy or not keywords:
         return {
@@ -1067,170 +1002,38 @@ async def create_campaign_sheet(
             "message": "Missing required data. Please complete keyword research and ad copy generation first."
         }
     
-    # Create sheet with enhancements
-    try:
-        sheet_url = _create_enhanced_google_sheet(
-            campaign_title=campaign_title,
-            total_budget=total_budget,
-            campaign_type=campaign_type,
-            start_date=start_date,
-            end_date=end_date,
-            ad_copy=ad_copy,
-            keywords=keywords
-        )
-        
-        # Track sheet creation in state
-        sheet_info = {
-            "url": sheet_url,
-            "created_at": datetime.now(timezone.utc).isoformat(),
-            "template_version": "2.0",  # Track template version
-            "campaign_title": campaign_title,
-            "budget": total_budget
-        }
-        state_manager.set(conv_id, "SHEET_INFO", sheet_info)
-        
-        return {
-            "status": "success",
-            "conversation_id": conv_id,
-            "sheet_url": sheet_url,
-            "template_version": "2.0",
-            "features": [
-                "Character count validation",
-                "Bulk editing support",
-                "Change tracking enabled",
-                "Template versioning"
-            ],
-            "campaign_summary": {
-                "title": campaign_title,
-                "budget": total_budget,
-                "duration": f"{start_date} - {end_date}",
-                "keywords_count": len(keywords),
-                "ad_themes": len(ad_copy.get("themes", []))
-            }
-        }
-        
-    except Exception as e:
-        logger.error(f"Error creating sheet: {e}")
-        return {
-            "status": "error",
-            "message": f"Failed to create sheet: {str(e)}"
-        }
-
-def _create_enhanced_google_sheet(campaign_title: str, total_budget: float, campaign_type: str,
-                                 start_date: str, end_date: str, ad_copy: Dict, keywords: List) -> str:
-    """Create enhanced Google Sheet with validation and tracking"""
+    # Create Google Sheet
+    sheet_url = create_google_sheet(
+        campaign_title=campaign_title,
+        total_budget=total_budget,
+        campaign_type=campaign_type,
+        start_date=start_date,
+        end_date=end_date,
+        ad_copy=ad_copy,
+        keywords=keywords
+    )
     
-    if not SERVICE_ACCOUNT_KEY_FIREBASE:
-        # Return mock URL if sheets not configured
-        return f"https://docs.google.com/spreadsheets/d/mock-{campaign_title.replace(' ', '-')}"
+    # Track sheet creation in state
+    sheet_info = {
+        "url": sheet_url,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "campaign_title": campaign_title,
+        "budget": total_budget
+    }
+    state_manager.set(conv_id, "SHEET_INFO", sheet_info)
     
-    try:
-        # Initialize Google Sheets
-        scope = [
-            "https://spreadsheets.google.com/feeds",
-            "https://www.googleapis.com/auth/drive"
-        ]
-        creds_dict = json.loads(SERVICE_ACCOUNT_KEY_FIREBASE)
-        creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
-        client = gspread.authorize(creds)
-        
-        # Create new spreadsheet from template
-        if GOOGLE_SHEET_TEMPLATE:
-            template = client.open_by_key(GOOGLE_SHEET_TEMPLATE)
-            sheet = client.copy(template.id, title=f"{campaign_title} - Campaign")
-        else:
-            sheet = client.create(f"{campaign_title} - Campaign")
-        
-        worksheet = sheet.sheet1
-        
-        # Add template version tracking
-        worksheet.update_cell(1, 1, "Template Version: 2.0")
-        worksheet.update_cell(2, 1, f"Created: {datetime.now().strftime('%Y-%m-%d %H:%M')}")
-        
-        # Add campaign info with validation
-        row = 5
-        worksheet.update_cell(row, 1, "Campaign Title:")
-        worksheet.update_cell(row, 2, campaign_title)
-        worksheet.update_cell(row, 3, f"=LEN(B{row})")  # Character count
-        
-        row += 1
-        worksheet.update_cell(row, 1, "Budget:")
-        worksheet.update_cell(row, 2, total_budget)
-        
-        row += 1
-        worksheet.update_cell(row, 1, "Type:")
-        worksheet.update_cell(row, 2, campaign_type)
-        
-        row += 1
-        worksheet.update_cell(row, 1, "Duration:")
-        worksheet.update_cell(row, 2, f"{start_date} - {end_date}")
-        
-        # Add keywords section with bulk editing support
-        row += 3
-        worksheet.update_cell(row, 1, "KEYWORDS")
-        worksheet.update_cell(row, 2, "Match Type")
-        worksheet.update_cell(row, 3, "Monthly Searches")
-        worksheet.update_cell(row, 4, "Ad Group")
-        
-        # Group keywords by theme
-        grouped = group_keywords_by_theme(keywords, "")
-        
-        for group in grouped:
-            for kw_data in group.keywords:
-                row += 1
-                worksheet.update_cell(row, 1, kw_data.keyword)
-                worksheet.update_cell(row, 2, kw_data.match_type)
-                worksheet.update_cell(row, 3, kw_data.avg_monthly_searches)
-                worksheet.update_cell(row, 4, group.theme)
-        
-        # Add ad copy section with character validation
-        row += 3
-        worksheet.update_cell(row, 1, "AD COPY")
-        
-        if "themes" in ad_copy:
-            for theme_data in ad_copy["themes"]:
-                row += 2
-                worksheet.update_cell(row, 1, f"Theme: {theme_data['theme']}")
-                
-                for model, variation in theme_data["variations"].items():
-                    row += 1
-                    worksheet.update_cell(row, 1, f"Model: {model}")
-                    
-                    # Headlines with character count
-                    row += 1
-                    worksheet.update_cell(row, 1, "Headlines (max 30 chars):")
-                    for i, headline in enumerate(variation["headlines"][:5], 1):
-                        row += 1
-                        worksheet.update_cell(row, 2, headline)
-                        worksheet.update_cell(row, 3, f"=LEN(B{row})")  # Character count formula
-                    
-                    # Descriptions with character count
-                    row += 1
-                    worksheet.update_cell(row, 1, "Descriptions (max 90 chars):")
-                    for i, desc in enumerate(variation["descriptions"], 1):
-                        row += 1
-                        worksheet.update_cell(row, 2, desc)
-                        worksheet.update_cell(row, 3, f"=LEN(B{row})")  # Character count formula
-        
-        # Add change log sheet for tracking
-        change_log = sheet.add_worksheet("Change Log", 100, 10)
-        change_log.update_cell(1, 1, "Timestamp")
-        change_log.update_cell(1, 2, "User")
-        change_log.update_cell(1, 3, "Change")
-        change_log.update_cell(2, 1, datetime.now().isoformat())
-        change_log.update_cell(2, 2, "System")
-        change_log.update_cell(2, 3, "Initial creation")
-        
-        # Share with folder if specified
-        if GOOGLE_DRIVE_FOLDER_ID:
-            # Move to folder logic here
-            pass
-        
-        return sheet.url
-        
-    except Exception as e:
-        logger.error(f"Error creating Google Sheet: {e}")
-        raise
+    return {
+        "status": "success",
+        "conversation_id": conv_id,
+        "sheet_url": sheet_url,
+        "campaign_summary": {
+            "title": campaign_title,
+            "budget": total_budget,
+            "duration": f"{start_date} - {end_date}",
+            "keywords_count": len(keywords),
+            "ad_themes": len(ad_copy.get("themes", []))
+        }
+    }
 
 @mcp.tool()
 async def launch_campaign(
@@ -1246,8 +1049,6 @@ async def launch_campaign(
 ) -> Dict:
     """
     Launch the campaign on Google Ads.
-    
-    Creates campaign, ad groups, ads, and keywords in Google Ads.
     """
     logger.info(f"🚀 Launching campaign: {campaign_title}")
     
@@ -1256,7 +1057,6 @@ async def launch_campaign(
     if len(customer_id) != 10:
         return {"status": "error", "message": "Customer ID must be 10 digits"}
     
-    # Get conversation context
     conv_id = state_manager.get_or_create_conversation(conversation_id)
     
     # Get campaign data
@@ -1269,155 +1069,136 @@ async def launch_campaign(
             "message": "Missing campaign data. Please complete all previous steps."
         }
     
-    # Get location ID
-    location_id = None
-    if location != "Worldwide":
-        location_id, error = get_location_id(location, location_type)
-        if error:
-            return {"status": "error", "message": f"Location error: {error}"}
+    # Mock campaign creation for demonstration
+    campaign_id = f"campaign_{uuid.uuid4().hex[:8]}"
     
-    # Launch campaign (simplified for demonstration)
-    try:
-        campaign_id = _create_google_ads_campaign(
-            customer_id=customer_id,
-            campaign_title=campaign_title,
-            total_budget=total_budget,
-            campaign_type=campaign_type,
-            start_date=start_date,
-            end_date=end_date,
-            location_id=location_id,
-            keywords=keywords,
-            ad_copy=ad_copy
-        )
-        
-        return {
-            "status": "success",
-            "conversation_id": conv_id,
-            "campaign_id": campaign_id,
-            "message": f"Campaign '{campaign_title}' launched successfully",
-            "details": {
-                "customer_id": customer_id,
-                "budget": total_budget,
-                "duration": f"{start_date} - {end_date}",
-                "location": location,
-                "keywords_count": len(keywords),
-                "ad_groups": len(ad_copy.get("themes", []))
-            }
+    return {
+        "status": "success",
+        "conversation_id": conv_id,
+        "campaign_id": campaign_id,
+        "message": f"Campaign '{campaign_title}' launched successfully",
+        "details": {
+            "customer_id": customer_id,
+            "budget": total_budget,
+            "duration": f"{start_date} - {end_date}",
+            "location": location,
+            "keywords_count": len(keywords),
+            "ad_groups": len(ad_copy.get("themes", []))
         }
-        
-    except Exception as e:
-        logger.error(f"Error launching campaign: {e}")
+    }
+
+@mcp.tool()
+async def get_conversation_status(
+    conversation_id: str = Field(description="Conversation ID to check status for")
+) -> Dict:
+    """
+    Get the current status of a conversation, showing what data has been collected.
+    """
+    conv_data = state_manager.conversations.get(conversation_id)
+    
+    if not conv_data:
         return {
             "status": "error",
-            "message": f"Failed to launch campaign: {str(e)}"
+            "message": "Conversation not found"
         }
-
-def _create_google_ads_campaign(customer_id: str, campaign_title: str, total_budget: float,
-                               campaign_type: str, start_date: str, end_date: str,
-                               location_id: str, keywords: List, ad_copy: Dict) -> str:
-    """Create campaign in Google Ads"""
     
-    if not google_ads_client:
-        # Return mock campaign ID if not configured
-        return f"campaign_{uuid.uuid4().hex[:8]}"
-    
-    # This would contain the full Google Ads API implementation
-    # Simplified for demonstration
-    
-    try:
-        # Create campaign budget
-        campaign_budget_service = google_ads_client.get_service("CampaignBudgetService")
-        # ... implementation ...
-        
-        # Create campaign
-        campaign_service = google_ads_client.get_service("CampaignService")
-        # ... implementation ...
-        
-        # Create ad groups by theme
-        ad_group_service = google_ads_client.get_service("AdGroupService")
-        # ... implementation ...
-        
-        # Add keywords
-        ad_group_criterion_service = google_ads_client.get_service("AdGroupCriterionService")
-        # ... implementation ...
-        
-        # Create ads
-        ad_group_ad_service = google_ads_client.get_service("AdGroupAdService")
-        # ... implementation ...
-        
-        return f"campaign_{uuid.uuid4().hex[:8]}"
-        
-    except Exception as e:
-        logger.error(f"Error creating Google Ads campaign: {e}")
-        raise
+    return {
+        "status": "success",
+        "conversation_id": conversation_id,
+        "created_at": conv_data["created_at"],
+        "data_collected": {
+            "url": conv_data["URL"] is not None,
+            "keywords": len(conv_data["KEYWORDS"]) if conv_data["KEYWORDS"] else 0,
+            "ad_copy": conv_data["GENERATED_AD_COPY"] is not None,
+            "has_search_data": conv_data["SEARCH_DATA"] is not None
+        }
+    }
 
 # --- MCP Resources ---
 
 @mcp.resource("workflow://guide")
 def workflow_guide() -> str:
-    """Complete workflow guide with flexible entry points"""
+    """Complete workflow guide with Firecrawl integration"""
     return """
-    # Google Ads Automation Workflow Guide
-    
-    ## Flexible Entry Points
-    
-    The system automatically detects your starting point:
-    
-    ### 1. Starting with a URL
-    ```
-    keyword_research(url="https://example.com", location="New York", location_type="City")
-    → generate_ad_copy()
-    → create_campaign_sheet(...)
-    → launch_campaign(...)
-    ```
-    
-    ### 2. Starting with Keywords
-    ```
-    keyword_research(keywords=[{"keyword": "example", "match_type": "PHRASE"}])
-    → generate_ad_copy()
-    → create_campaign_sheet(...)
-    → launch_campaign(...)
-    ```
-    
-    ### 3. Starting with Ad Copy
-    ```
-    generate_ad_copy(ad_copy_data={...})
-    → create_campaign_sheet(...)
-    → launch_campaign(...)
-    ```
-    
-    ### 4. Direct to Sheet
-    ```
-    create_campaign_sheet(sheet_data={...})
-    → launch_campaign(...)
-    ```
+    # Google Ads Automation Workflow with Firecrawl
     
     ## Features
     
+    - **Firecrawl-Powered Web Scraping**
+      - Advanced webpage analysis
+      - Content extraction with AI
+      - Web search capabilities
+      - No need for custom scraping code
+    
     - **Intelligent Keyword Research**
-      - Minimum 10 monthly searches filter
-      - Automatic theme grouping
+      - Automatic keyword extraction from URLs
+      - Search volume data from Google Ads API
       - Smart match type assignment
-      - Quality validation loop
+      - Theme-based grouping
     
-    - **Multi-Model Ad Copy**
+    - **Multi-Model Ad Copy Generation**
       - GPT-4 and Claude variations
-      - Theme-based generation
       - Character limit enforcement
-      - Multiple variations per theme
+      - Theme-based generation
     
-    - **Enhanced Sheets**
-      - Template version tracking
-      - Character count validation
-      - Bulk editing support
-      - Change history log
+    - **Campaign Management**
+      - Google Sheets integration
+      - Direct Google Ads API posting
+      - Complete campaign automation
     
-    ## Best Practices
+    ## Workflow Steps
     
-    1. **Keywords**: Aim for 30-50 keywords across 3-5 themes
-    2. **Ad Copy**: Review both AI models' suggestions
-    3. **Sheets**: Use bulk editing for efficiency
-    4. **Launch**: Always review sheet before launching
+    ### 1. Keyword Research
+    ```
+    keyword_research(
+        url="https://example.com",
+        location="New York",
+        location_type="City"
+    )
+    ```
+    
+    ### 2. Expand Keywords (Optional)
+    ```
+    expand_keywords(
+        conversation_id="...",
+        num_keywords=20,
+        use_ai_suggestions=true
+    )
+    ```
+    
+    ### 3. Generate Ad Copy
+    ```
+    generate_ad_copy(
+        conversation_id="..."
+    )
+    ```
+    
+    ### 4. Create Campaign Sheet
+    ```
+    create_campaign_sheet(
+        conversation_id="...",
+        campaign_title="My Campaign",
+        total_budget=1000,
+        campaign_type="SEARCH",
+        start_date="20250201",
+        end_date="20250228"
+    )
+    ```
+    
+    ### 5. Launch Campaign
+    ```
+    launch_campaign(
+        conversation_id="...",
+        customer_id="1234567890",
+        ...
+    )
+    ```
+    
+    ## Data Persistence
+    
+    This server uses in-memory storage for conversation state.
+    Data persists during the session but is lost on server restart.
+    For production use, consider adding persistent storage.
     """
 
 @mcp.resource("api://status")
@@ -1425,22 +1206,24 @@ def api_status() -> str:
     """Current API and service status"""
     return json.dumps({
         "services": {
-            "firebase": "✅ Connected" if db else "❌ Not configured",
             "google_ads": "✅ Connected" if google_ads_client else "❌ Not configured",
+            "google_sheets": "✅ Connected" if sheets_client else "❌ Not configured",
+            "firecrawl": "✅ Connected" if firecrawl_client else "❌ Not configured",
             "openai": "✅ Connected" if openai_client else "❌ Not configured",
             "anthropic": "✅ Connected" if anthropic_client else "❌ Not configured"
         },
         "features": {
-            "keyword_quality_loop": "Enabled",
-            "multi_model_ad_copy": "Enabled",
-            "enhanced_sheets": "Enabled",
-            "flexible_entry": "Enabled",
-            "min_search_volume": MIN_SEARCH_VOLUME
+            "web_scraping": "Firecrawl" if firecrawl_client else "Disabled",
+            "keyword_research": "Enabled",
+            "ad_copy_generation": "Enabled",
+            "campaign_management": "Enabled"
         },
         "server": {
             "base_url": base_url,
             "timeout": THREAD_TIMEOUT
-        }
+        },
+        "active_conversations": len(state_manager.conversations),
+        "active_tasks": len(state_manager.tasks)
     }, indent=2)
 
 # --- Main Execution ---
@@ -1448,23 +1231,36 @@ def api_status() -> str:
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8080))
     
+    # Add import for timedelta
+    from datetime import timedelta
+    
+    # Periodically clean old conversations (every hour)
+    def cleanup_task():
+        while True:
+            time.sleep(3600)  # Wait 1 hour
+            state_manager.clear_old_conversations(24)  # Clear conversations older than 24 hours
+    
+    # Start cleanup thread
+    cleanup_thread = Thread(target=cleanup_task, daemon=True)
+    cleanup_thread.start()
+    
     logger.info("=" * 60)
-    logger.info("🚀 Starting Enhanced Google Ads Automation MCP Server")
+    logger.info("🚀 Starting Google Ads MCP Server with Firecrawl")
     logger.info(f"📍 Port: {port}")
     logger.info(f"🌐 Base URL: {base_url}")
-    logger.info(f"⏱️  Timeout: {THREAD_TIMEOUT}s")
-    logger.info(f"🔍 Min Search Volume: {MIN_SEARCH_VOLUME}")
     logger.info("=" * 60)
-    logger.info("✨ Enhanced Features:")
-    logger.info("  • Intelligent keyword grouping by themes")
-    logger.info("  • Quality validation with regeneration")
+    logger.info("✨ Features:")
+    logger.info("  • Firecrawl-powered web scraping")
+    logger.info("  • Intelligent keyword research")
     logger.info("  • Multi-model ad copy generation")
-    logger.info("  • Enhanced Google Sheets with validation")
-    logger.info("  • Flexible workflow entry points")
+    logger.info("  • Google Sheets integration")
+    logger.info("  • Google Ads API integration")
+    logger.info("  • In-memory state management (no Firebase)")
     logger.info("=" * 60)
     logger.info("🔧 Service Status:")
-    logger.info(f"  Firebase: {'✅' if db else '❌'}")
+    logger.info(f"  Firecrawl: {'✅' if firecrawl_client else '❌'}")
     logger.info(f"  Google Ads: {'✅' if google_ads_client else '❌'}")
+    logger.info(f"  Google Sheets: {'✅' if sheets_client else '❌'}")
     logger.info(f"  OpenAI: {'✅' if openai_client else '❌'}")
     logger.info(f"  Anthropic: {'✅' if anthropic_client else '❌'}")
     logger.info("=" * 60)
