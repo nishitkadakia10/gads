@@ -757,8 +757,8 @@ async def list_accounts() -> str:
 
 @mcp.tool()
 async def execute_gaql_query(
-    customer_id: Optional[str] = Field(default=None, description="Google Ads customer ID (defaults to GOOGLE_ADS_DEFAULT_CLIENT_ID)"),
-    query: str = Field(description="Valid GAQL query string")
+    query: str = Field(description="Valid GAQL query string"),
+    customer_id: Optional[str] = Field(default=None, description="Google Ads customer ID (defaults to GOOGLE_ADS_DEFAULT_CLIENT_ID)")
 ) -> str:
     """
     Execute a custom GAQL query.
