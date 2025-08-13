@@ -965,12 +965,12 @@ async def generate_ad_copy(
 
 @mcp.tool()
 async def create_campaign_sheet(
-    conversation_id: Optional[str] = Field(default=None, description="Conversation ID"),
     campaign_title: str = Field(description="Campaign title"),
     total_budget: float = Field(description="Total budget for campaign"),
     campaign_type: str = Field(description="Campaign type (SEARCH, DISPLAY, etc.)"),
     start_date: str = Field(description="Start date in YYYYMMDD format"),
-    end_date: str = Field(description="End date in YYYYMMDD format")
+    end_date: str = Field(description="End date in YYYYMMDD format"),
+    conversation_id: Optional[str] = Field(default=None, description="Conversation ID")  # Move optional param to end
 ) -> Dict:
     """
     Create Google Sheet with campaign data.
@@ -978,7 +978,7 @@ async def create_campaign_sheet(
     logger.info(f"📊 Creating campaign sheet: {campaign_title}")
     
     conv_id = state_manager.get_or_create_conversation(conversation_id)
-    
+
     # Validate dates
     try:
         start = datetime.strptime(start_date, "%Y%m%d")
@@ -1037,7 +1037,6 @@ async def create_campaign_sheet(
 
 @mcp.tool()
 async def launch_campaign(
-    conversation_id: Optional[str] = Field(default=None, description="Conversation ID"),
     customer_id: str = Field(description="Google Ads customer ID (10 digits)"),
     campaign_title: str = Field(description="Campaign title"),
     total_budget: float = Field(description="Total budget"),
@@ -1045,7 +1044,8 @@ async def launch_campaign(
     start_date: str = Field(description="Start date YYYYMMDD"),
     end_date: str = Field(description="End date YYYYMMDD"),
     location: str = Field(default="United States", description="Target location"),
-    location_type: str = Field(default="Country", description="Location type")
+    location_type: str = Field(default="Country", description="Location type"),
+    conversation_id: Optional[str] = Field(default=None, description="Conversation ID")  # Move optional param to end
 ) -> Dict:
     """
     Launch the campaign on Google Ads.
