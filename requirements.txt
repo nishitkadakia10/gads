@@ -1,29 +1,48 @@
-firebase-functions==0.4.2
-agency_swarm==0.4.1
-crawl4ai==0.3.745
-google-cloud==0.34.0
-fastapi==0.115.0
-httpx==0.27.2
-python-dotenv==1.0.1
-requests==2.32.3
-uvicorn==0.31.0
-Flask-Cors==5.0.0
-pytest==8.3.3
-zi-api-auth-client==1.0.2
-pydantic
-fuzzywuzzy==0.18.0
-python-Levenshtein==0.26.1
-anthropic==0.52.2
-jsonref==1.1.0
-gspread==6.1.2
-oauth2client==4.1.3
-google-ads==25.1.0
-google-auth==2.32.0
-google-api-python-client==2.140.0
-google-auth-httplib2==0.2.0
-google-auth-oauthlib==1.2.1
-pandas==2.2.2
-litellm
-google-generativeai==0.8.3
-nodriver
-openai==1.84.0
+# Web framework
+fastapi>=0.115.0
+uvicorn[standard]>=0.31.0
+sse-starlette>=1.6.5
+
+# MCP requirements
+mcp[cli]>=1.6.0
+fastmcp>=2.11.0
+
+# Google Services
+google-ads>=25.1.0
+google-auth>=2.32.0
+google-api-python-client>=2.140.0
+google-auth-httplib2>=0.2.0
+google-auth-oauthlib>=1.2.1
+google-cloud>=0.34.0
+firebase-admin>=6.5.0
+firebase-functions>=0.4.2
+gspread>=6.1.2
+oauth2client>=4.1.3
+
+# AI Services
+openai>=1.84.0
+anthropic>=0.52.2
+litellm>=1.0.0
+google-generativeai>=0.8.3
+
+# Web Scraping
+crawl4ai>=0.3.745
+nodriver>=0.36
+httpx>=0.27.2
+requests>=2.32.3
+
+# Data Processing
+pandas>=2.2.2
+numpy>=1.24.0
+fuzzywuzzy>=0.18.0
+python-Levenshtein>=0.26.1
+
+# Utilities
+python-dotenv>=1.0.1
+pydantic>=2.8.0
+jsonref>=1.1.0
+python-dateutil>=2.8.2
+
+# Async support
+asyncio>=3.4.3
+aiofiles>=23.2.1
