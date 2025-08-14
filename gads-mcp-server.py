@@ -518,7 +518,13 @@ def get_keyword_ideas_from_api(
                     continue
                 
                 metrics = result.get('keywordIdeaMetrics', {})
-                avg_searches = metrics.get('avgMonthlySearches', 0)
+                
+                # Convert avgMonthlySearches to int (it might come as string)
+                avg_searches_raw = metrics.get('avgMonthlySearches', 0)
+                try:
+                    avg_searches = int(avg_searches_raw) if avg_searches_raw else 0
+                except (ValueError, TypeError):
+                    avg_searches = 0
                 
                 # Skip keywords below threshold
                 if avg_searches < MIN_MONTHLY_SEARCHES:
@@ -532,14 +538,33 @@ def get_keyword_ideas_from_api(
                 # Determine intent
                 intent = determine_intent(keyword_text)
                 
+                # Handle bid values (might also be strings)
+                try:
+                    low_bid_micros = int(metrics.get('lowTopOfPageBidMicros', 0)) if 'lowTopOfPageBidMicros' in metrics else 0
+                    low_bid = low_bid_micros / 1000000 if low_bid_micros else None
+                except (ValueError, TypeError):
+                    low_bid = None
+                
+                try:
+                    high_bid_micros = int(metrics.get('highTopOfPageBidMicros', 0)) if 'highTopOfPageBidMicros' in metrics else 0
+                    high_bid = high_bid_micros / 1000000 if high_bid_micros else None
+                except (ValueError, TypeError):
+                    high_bid = None
+                
+                # Handle competition index
+                try:
+                    comp_index = int(metrics.get('competitionIndex', 0)) if metrics.get('competitionIndex') else None
+                except (ValueError, TypeError):
+                    comp_index = None
+                
                 keyword_data = KeywordData(
                     keyword=keyword_text.lower(),
                     match_type=match_type,
                     avg_monthly_searches=avg_searches,
                     competition=CompetitionLevel(competition),
-                    competition_index=metrics.get('competitionIndex'),
-                    low_top_of_page_bid=metrics.get('lowTopOfPageBidMicros', 0) / 1000000 if 'lowTopOfPageBidMicros' in metrics else None,
-                    high_top_of_page_bid=metrics.get('highTopOfPageBidMicros', 0) / 1000000 if 'highTopOfPageBidMicros' in metrics else None,
+                    competition_index=comp_index,
+                    low_top_of_page_bid=low_bid,
+                    high_top_of_page_bid=high_bid,
                     intent=intent
                 )
                 
