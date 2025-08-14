@@ -316,15 +316,33 @@ GOOGLE_ADS_DEVELOPER_TOKEN = os.getenv("GOOGLE_ADS_DEVELOPER_TOKEN")
 GOOGLE_ADS_MANAGER_CUSTOMER_ID = os.getenv("GOOGLE_ADS_MANAGER_CUSTOMER_ID")
 GOOGLE_ADS_DEFAULT_CLIENT_ID = os.getenv("GOOGLE_ADS_DEFAULT_CLIENT_ID")
 
-# Service Account Keys
-SERVICE_ACCOUNT_KEY_SHEETS = json.loads(os.getenv("SERVICE_ACCOUNT_KEY_SHEETS", "{}"))
+# Service Account Keys - Handle both base64 and direct JSON
+def decode_service_account_sheets():
+    """Decode service account for Google Sheets - handles base64 or JSON"""
+    key_data = os.getenv("SERVICE_ACCOUNT_KEY_SHEETS")
+    if not key_data:
+        return None
+    
+    try:
+        # First try to parse as JSON directly
+        if key_data.strip().startswith('{'):
+            return json.loads(key_data)
+        else:
+            # Assume it's base64 encoded
+            decoded_bytes = base64.b64decode(key_data)
+            return json.loads(decoded_bytes.decode('utf-8'))
+    except Exception as e:
+        logger.error(f"❌ Failed to decode SERVICE_ACCOUNT_KEY_SHEETS: {e}")
+        return None
+
+SERVICE_ACCOUNT_KEY_SHEETS = decode_service_account_sheets()
 
 # AI Model API Keys
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
 
-# Template configuration
-GOOGLE_SHEET_TEMPLATE_ID = os.getenv("GOOGLE_SHEET_TEMPLATE_ID")
+# Template configuration - Handle both old and new env var names
+GOOGLE_SHEET_TEMPLATE_ID = os.getenv("GOOGLE_SHEET_TEMPLATE_ID") or os.getenv("GOOGLE_SHEET_TEMPLATE")
 GOOGLE_DRIVE_FOLDER_ID = os.getenv("GOOGLE_DRIVE_FOLDER_ID")
 
 # Get server URL
