@@ -31,6 +31,7 @@ import requests
 
 # AI imports for ad copy generation
 from openai import OpenAI
+client = OpenAI()
 from anthropic import Anthropic
 
 # Google Sheets imports
@@ -841,13 +842,24 @@ async def generate_ad_copy(
                 - Highlight benefits and value
                 """
                 
-                response = openai_client.beta.chat.completions.parse(
-                    model="gpt-4o",
-                    messages=[
-                        {"role": "system", "content": "You are an expert Google Ads copywriter. Create compelling, concise ad copy."},
-                        {"role": "user", "content": prompt}
-                    ],
-                    response_format=AdCopyResponse
+                response = client.chat.completions.create(
+                  model="gpt-5",
+                  messages=[
+                    {
+                      "role": "developer",
+                      "content": [
+                        {
+                          "type": "text",
+                          "text": "Write compelling, concise Google Ads copy to maximize engagement and conversions.  \n- Objective: Produce advertising text for Google Ads campaigns, adhering to best practices for keyword integration, call-to-action (CTA), and value proposition.  \n- Requirements:  \n  - Provide exactly 15 unique headlines (each 15–30 characters; mandatory character limit).  \n  - Provide exactly 4 unique descriptions (each 80–90 characters; mandatory character limit).  \n  - Each headline and description must:  \n    - Naturally incorporate relevant keywords.  \n    - Include a strong CTA.  \n    - Clearly highlight the core benefits and unique value of the product/service.  \n- Ensure copy is engaging, avoids repetition, and stands out competitively.  \n- Only output the requested items—do not include explanations or additional content.  \n- Reasoning Order:  \n  - First, plan main product/service benefits, value, and potential keywords.  \n  - Next, internally consider how to fit those elements naturally into short headlines and precise descriptions.  \n  - Only after reasoning, generate the finalized ad copy content as requested.  \n- Persistence: If you cannot generate enough outputs that meet all constraints, repeat your process and revise until all requirements are fully met before finalizing the answer.\n\n**Output Format:**  \nRespond in this JSON structure (no markdown or additional commentary):  \n{\n  \"headlines\": [\n    \"[headline1: 15-30 chars]\",\n    \"...\",\n    \"[headline15: 15-30 chars]\"\n  ],\n  \"descriptions\": [\n    \"[description1: 80-90 chars]\",\n    \"...\",\n    \"[description4: 80-90 chars]\"\n  ]\n}\n\n**Example**  \nInput: Product is \"Online Dog Training\", keywords: \"puppy courses\", \"dog obedience\", \"train your dog\"\n\nOutput:  \n{\n  \"headlines\": [\n    \"Puppy Courses That Work\",\n    \"Train Your Dog Online Now\",\n    \"Dog Obedience Made Easy\",\n    \"(12 more ...)\"\n  ],\n  \"descriptions\": [\n    \"Train your dog with expert-led puppy courses. Achieve obedience. Start today!\",\n    \"Effective online dog training & obedience classes. See better dog behavior fast.\",\n    \"(2 more ...)\"\n  ]\n}\n\n*(In real examples, all headlines and descriptions will be unique, adhere strictly to character limits, and make full use of allotted space.)*\n\n**Important:**  \n- Follow character limits precisely for every item.  \n- Integrate all requirements for each line.  \n- Only output the requested JSON data.  \n- Keep main task and requirements in focus."
+                        }
+                      ]
+                    }
+                  ],
+                  response_format={
+                    "type": "text"
+                  },
+                  verbosity="high",
+                  reasoning_effort="high"
                 )
                 
                 result = json.loads(response.choices[0].message.content)
@@ -882,8 +894,8 @@ async def generate_ad_copy(
                 """
                 
                 response = anthropic_client.messages.create(
-                    model="claude-3-5-sonnet-20241022",
-                    max_tokens=2000,
+                    model="claude-opus-4-1-20250805",
+                    max_tokens=5000,
                     messages=[{"role": "user", "content": prompt}]
                 )
                 
