@@ -627,6 +627,8 @@ state_manager = WorkflowState()
 
 # --- Google Ads API Functions ---
 
+# Replace your get_keyword_ideas_from_api function with this version:
+
 def get_keyword_ideas_from_api(
     customer_id: str,
     url: Optional[str] = None,
@@ -720,10 +722,9 @@ def get_keyword_ideas_from_api(
                 competition = metrics.get('competition', 'UNKNOWN')
                 
                 # Determine match type intelligently
-                match_type = determine_match_type(keyword_text, avg_searches, competition)
+                match_type, confidence = determine_match_type(keyword_text, avg_searches, competition)
                 
-                # Determine intent
-                intent = determine_intent(keyword_text)
+                # REMOVED: intent = determine_intent(keyword_text)
                 
                 # Handle bid values (might also be strings)
                 try:
@@ -751,7 +752,9 @@ def get_keyword_ideas_from_api(
                     competition=CompetitionLevel(competition),
                     competition_index=comp_index,
                     low_top_of_page_bid=low_bid,
-                    high_top_of_page_bid=high_bid
+                    high_top_of_page_bid=high_bid,
+                    confidence_score=confidence  # Add the confidence score from determine_match_type
+                    # REMOVED: intent=intent
                 )
                 
                 keyword_ideas.append(keyword_data)
