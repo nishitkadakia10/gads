@@ -913,7 +913,7 @@ async def keyword_research(
         }
 
 @mcp.tool()
-async def async def direct_keyword_input(
+async def direct_keyword_input(
     keywords: List[Dict] = Field(description="List of keywords with match types"),
     conversation_id: Optional[str] = Field(default=None, description="Conversation ID")
 ) -> Dict:
