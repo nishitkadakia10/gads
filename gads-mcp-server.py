@@ -562,7 +562,7 @@ if SERVICE_ACCOUNT_KEY_SHEETS:
 
 # Initialize AI clients
 openai_client = OpenAI(api_key=OPENAI_API_KEY) if OPENAI_API_KEY else None
-anthropic_client = Anthropic(api_key=ANTHROPIC_API_KEY) if ANTHROPIC_API_KEY else None
+anthropic_client = anthropic(api_key=ANTHROPIC_API_KEY) if ANTHROPIC_API_KEY else None
 
 if openai_client:
     logger.info("✅ OpenAI connected")
