@@ -68,25 +68,16 @@ class MatchType(str, Enum):
     BROAD = "BROAD"
     PHRASE = "PHRASE"
     EXACT = "EXACT"
+    
+@dataclass
+class KeywordData:
+    keyword: str
+    match_type: Optional[MatchType] = None
+    avg_searches: int = 0
+    competition: str = "MEDIUM"
+    theme: Optional[str] = None
+    confidence_score: float = 0.0  # How confident we are in the match type
 
-class CompetitionLevel(str, Enum):
-    LOW = "LOW"
-    MEDIUM = "MEDIUM"
-    HIGH = "HIGH"
-    UNKNOWN = "UNKNOWN"
-
-class IntentType(str, Enum):
-    INFORMATIONAL = "INFORMATIONAL"
-    NAVIGATIONAL = "NAVIGATIONAL"
-    TRANSACTIONAL = "TRANSACTIONAL"
-    COMMERCIAL = "COMMERCIAL"
-
-class WorkflowStage(str, Enum):
-    URL_INPUT = "URL_INPUT"
-    KEYWORD_RESEARCH = "KEYWORD_RESEARCH"
-    AD_COPY_GENERATION = "AD_COPY_GENERATION"
-    SHEET_CREATION = "SHEET_CREATION"
-    PLATFORM_POSTING = "PLATFORM_POSTING"
 
 # --- Data Models ---
 
@@ -201,113 +192,301 @@ def get_headers(creds, use_manager_for_client: bool = True):
     
     return headers
 
-def determine_match_type(keyword: str, avg_searches: int = 0, competition: str = "MEDIUM") -> MatchType:
+# Comprehensive keyword indicator lists
+KEYWORD_INDICATORS = {
+    "high_purchase_intent": [
+        # Direct purchase actions
+        'buy', 'purchase', 'order', 'shop', 'shopping', 'store', 'get',
+        'acquire', 'obtain', 'procure', 'secure', 'invest', 'spend',
+        'checkout', 'cart', 'add to cart', 'buy now', 'shop now',
+        'order now', 'get started', 'sign up', 'register', 'enroll',
+        'subscribe', 'subscription', 'membership', 'join', 'apply',
+        
+        # Pricing and deals
+        'deal', 'deals', 'discount', 'discounts', 'coupon', 'coupons', 
+        'promo', 'promotion', 'promotional', 'voucher', 'code', 'codes',
+        'sale', 'sales', 'offer', 'offers', 'bargain', 'clearance', 
+        'special', 'specials', 'savings', 'save', 'reduction', 'markdown',
+        'pricing', 'price', 'prices', 'cost', 'costs', 'fee', 'fees', 
+        'rate', 'rates', 'charge', 'charges', 'expense', 'payment',
+        'quote', 'quotes', 'estimate', 'estimates', 'quotation', 'bid',
+        'invoice', 'billing', 'budget', 'financing', 'finance', 'loan',
+        'cheap', 'cheapest', 'cheaper', 'affordable', 'inexpensive',
+        'expensive', 'premium', 'luxury', 'deluxe', 'value', 'worth',
+        'free', 'complimentary', 'no cost', 'gratis', 'trial', 'demo',
+        
+        # Service booking
+        'hire', 'hiring', 'book', 'booking', 'reserve', 'reservation',
+        'schedule', 'scheduling', 'appointment', 'appointments',
+        'consultation', 'consult', 'meeting', 'session', 'visit',
+        'service', 'services', 'contract', 'contractor', 'professional',
+        'specialist', 'expert', 'consultant', 'agency', 'company',
+        'provider', 'supplier', 'vendor', 'dealer', 'retailer',
+        
+        # Availability and delivery
+        'available', 'availability', 'in stock', 'stock', 'inventory',
+        'delivery', 'deliver', 'ship', 'shipping', 'shipment', 'dispatch',
+        'pickup', 'pick up', 'collection', 'same day', 'next day',
+        'express', 'overnight', 'priority', 'standard', 'free shipping',
+        'fast delivery', 'quick delivery', 'tracked', 'tracking'
+    ],
+    
+    "comparison_research": [
+        # Comparison terms
+        'best', 'top', 'top rated', 'highest rated', 'most popular',
+        'leading', 'premier', 'finest', 'superior', 'excellent',
+        'review', 'reviews', 'reviewed', 'rating', 'ratings', 'rated',
+        'compare', 'comparison', 'comparing', 'versus', 'vs', 'vs.',
+        'alternative', 'alternatives', 'substitute', 'replacement',
+        'instead of', 'better than', 'worse than', 'similar to',
+        'like', 'comparable', 'equivalent', 'competitor', 'competitors',
+        
+        # Evaluation terms
+        'recommend', 'recommendation', 'recommended', 'suggest', 'suggestion',
+        'worth it', 'worth buying', 'should i buy', 'should i get',
+        'pros and cons', 'advantages', 'disadvantages', 'benefits',
+        'features', 'specifications', 'specs', 'details', 'information',
+        'analysis', 'evaluation', 'assessment', 'test', 'testing', 'tested',
+        'benchmark', 'performance', 'quality', 'reliability', 'durability',
+        
+        # Research qualifiers
+        'good', 'bad', 'reliable', 'trusted', 'trustworthy', 'reputable',
+        'legitimate', 'legit', 'scam', 'real', 'fake', 'authentic',
+        'genuine', 'original', 'certified', 'approved', 'verified',
+        'guaranteed', 'warranty', 'guarantee', 'return policy',
+        'refund', 'money back', 'satisfaction', 'customer service'
+    ],
+    
+    "informational_learning": [
+        # Question words
+        'how', 'how to', 'how do', 'how does', 'how can', 'how much',
+        'what', 'what is', 'what are', 'what does', 'what makes',
+        'why', 'why is', 'why are', 'why do', 'why does',
+        'when', 'when is', 'when to', 'when should', 'when can',
+        'where', 'where is', 'where to', 'where can', 'where does',
+        'who', 'who is', 'who are', 'who can', 'who should',
+        'which', 'which is', 'which one', 'which type', 'which kind',
+        
+        # Learning and guides
+        'guide', 'guides', 'tutorial', 'tutorials', 'lesson', 'lessons',
+        'learn', 'learning', 'teach', 'teaching', 'instruction', 'instructions',
+        'manual', 'handbook', 'walkthrough', 'step by step', 'how-to',
+        'diy', 'do it yourself', 'self', 'beginner', 'beginners',
+        'advanced', 'intermediate', 'expert', 'master', 'complete',
+        
+        # Information seeking
+        'tips', 'tricks', 'advice', 'suggestions', 'ideas', 'inspiration',
+        'examples', 'samples', 'templates', 'patterns', 'models',
+        'definition', 'meaning', 'define', 'explain', 'explanation',
+        'understand', 'understanding', 'concept', 'theory', 'principle',
+        'difference', 'difference between', 'similar', 'same as',
+        'types', 'kinds', 'categories', 'classification', 'variety',
+        
+        # Process and methods
+        'process', 'procedure', 'method', 'technique', 'approach',
+        'strategy', 'strategies', 'tactic', 'tactics', 'system',
+        'framework', 'model', 'formula', 'recipe', 'blueprint',
+        'checklist', 'steps', 'stages', 'phases', 'workflow',
+        'requirements', 'prerequisites', 'preparation', 'setup'
+    ],
+    
+    "urgency_indicators": [
+        'now', 'today', 'tonight', 'immediate', 'immediately', 'instantly',
+        'instant', 'urgent', 'urgently', 'asap', 'quickly', 'quick',
+        'fast', 'rapid', 'rapidly', 'express', 'rush', 'rushed',
+        'emergency', 'critical', 'time sensitive', 'deadline', 'limited time',
+        'last chance', 'ending soon', 'expires', 'expiring', 'hurry',
+        'same day', 'next day', '24 hour', '24/7', '24 hours', 'overnight',
+        'within hours', 'within minutes', 'right now', 'right away'
+    ],
+    
+    "location_indicators": [
+        'near me', 'nearby', 'near', 'closest', 'close to', 'local',
+        'locally', 'in my area', 'around me', 'in my city', 'neighborhood',
+        'neighbourhoods', 'vicinity', 'proximity', 'walking distance',
+        'driving distance', 'miles from', 'minutes from', 'blocks from',
+        'downtown', 'uptown', 'suburb', 'suburban', 'metro', 'metropolitan',
+        'city', 'town', 'village', 'county', 'district', 'region',
+        'area', 'zone', 'location', 'located', 'address', 'directions',
+        'map', 'maps', 'gps', 'coordinates', 'route', 'distance'
+    ],
+    
+    "service_indicators": [
+        'service', 'services', 'servicing', 'maintenance', 'maintain',
+        'repair', 'repairs', 'repairing', 'fix', 'fixing', 'fixed',
+        'install', 'installation', 'installing', 'setup', 'setting up',
+        'configure', 'configuration', 'customize', 'customization',
+        'upgrade', 'upgrading', 'update', 'updating', 'replace',
+        'replacement', 'replacing', 'restore', 'restoration', 'renovate',
+        'renovation', 'remodel', 'remodeling', 'refurbish', 'overhaul',
+        'inspect', 'inspection', 'diagnose', 'diagnosis', 'troubleshoot',
+        'troubleshooting', 'support', 'assistance', 'help', 'helping'
+    ]
+}
+
+def determine_match_type(
+    keyword: str, 
+    avg_searches: int = 0, 
+    competition: str = "MEDIUM",
+    has_conversion_data: bool = False,
+    account_maturity: str = "NEW",  # NEW, GROWING, MATURE
+    campaign_goal: str = "CONVERSIONS",  # CONVERSIONS, AWARENESS, DISCOVERY
+    use_smart_bidding: bool = False
+) -> Tuple[MatchType, float]:
     """
-    Intelligently determine match type based on keyword characteristics
+    Determine match type based on 2025 Google Ads best practices.
+    Returns match type and confidence score (0-1).
+    
+    Core principle: Start narrow, expand with data.
     """
     keyword_lower = keyword.lower()
     word_count = len(keyword.split())
+    confidence = 0.7  # Base confidence
     
-    # Branded terms → EXACT
-    branded_terms = os.environ.get("BRANDED_TERMS", "").split(",")
-    if any(brand.lower() in keyword_lower for brand in branded_terms if brand):
-        return MatchType.EXACT
-    
-    # Question keywords → PHRASE
-    if any(keyword_lower.startswith(q) for q in ['how', 'what', 'when', 'where', 'why', 'can', 'should']):
-        return MatchType.PHRASE
-    
-    # Location-specific → PHRASE
-    if any(loc in keyword_lower for loc in ['near me', 'in ', 'local', 'nearby']):
-        return MatchType.PHRASE
-    
-    # Long-tail (4+ words) → EXACT
-    if word_count >= 4:
-        return MatchType.EXACT
-    
-    # High volume + high competition → BROAD
-    if avg_searches > 5000 and competition == "HIGH":
-        return MatchType.BROAD
-    
-    # Low volume → EXACT
-    if avg_searches < 100:
-        return MatchType.EXACT
-    
-    # Single word generic terms → BROAD
-    if word_count == 1 and avg_searches > 1000:
-        return MatchType.BROAD
-    
-    # Default → PHRASE
-    return MatchType.PHRASE
-
-def determine_intent(keyword: str) -> IntentType:
-    """Determine the search intent of a keyword"""
-    keyword_lower = keyword.lower()
-    
-    # Transactional indicators
-    transactional = ['buy', 'purchase', 'order', 'price', 'cost', 'cheap', 'deal', 'discount']
-    if any(term in keyword_lower for term in transactional):
-        return IntentType.TRANSACTIONAL
-    
-    # Commercial investigation
-    commercial = ['best', 'top', 'review', 'compare', 'vs', 'alternative']
-    if any(term in keyword_lower for term in commercial):
-        return IntentType.COMMERCIAL
-    
-    # Navigational
-    navigational = ['login', 'sign in', 'website', '.com']
-    if any(term in keyword_lower for term in navigational):
-        return IntentType.NAVIGATIONAL
-    
-    # Informational (questions and general)
-    informational = ['how', 'what', 'why', 'when', 'where', 'who', 'guide', 'tutorial']
-    if any(term in keyword_lower for term in informational):
-        return IntentType.INFORMATIONAL
-    
-    return IntentType.INFORMATIONAL
-
-def group_keywords_by_theme(keywords: List[KeywordData]) -> Dict[str, List[KeywordData]]:
-    """
-    Group keywords into logical themes for ad groups
-    """
-    themes = {
-        "Installation & Setup": [],
-        "Repair & Service": [],
-        "Products & Features": [],
-        "Pricing & Cost": [],
-        "Location & Local": [],
-        "Brand Specific": [],
-        "Comparison & Reviews": [],
-        "General": []
+    # Check for various indicators
+    indicators_found = {
+        indicator_type: sum(1 for term in terms if term in keyword_lower)
+        for indicator_type, terms in KEYWORD_INDICATORS.items()
     }
     
-    for kw in keywords:
-        keyword_text = kw.keyword.lower()
-        assigned = False
-        
-        theme_rules = {
-            "Installation & Setup": ['install', 'setup', 'new', 'replacement', 'configure'],
-            "Repair & Service": ['repair', 'fix', 'service', 'maintenance', 'support'],
-            "Products & Features": ['features', 'benefits', 'specifications', 'model', 'type'],
-            "Pricing & Cost": ['price', 'cost', 'cheap', 'affordable', 'free', 'quote'],
-            "Location & Local": ['near me', 'local', 'nearby', 'in my area'],
-            "Brand Specific": os.environ.get("BRANDED_TERMS", "").split(","),
-            "Comparison & Reviews": ['best', 'top', 'review', 'compare', 'vs', 'alternative']
-        }
-        
-        for theme, keywords_list in theme_rules.items():
-            if any(term in keyword_text for term in keywords_list if term):
-                themes[theme].append(kw)
-                kw.theme = theme
-                assigned = True
-                break
-        
-        if not assigned:
-            themes["General"].append(kw)
-            kw.theme = "General"
+    # 1. BRANDED TERMS - Always EXACT (highest confidence)
+    branded_terms = os.environ.get("BRANDED_TERMS", "").split(",")
+    if any(brand.lower() in keyword_lower for brand in branded_terms if brand):
+        return MatchType.EXACT, 0.95
     
-    # Remove empty themes
-    return {k: v for k, v in themes.items() if v}
+    # 2. HIGH-VALUE EXACT MATCH SCENARIOS
+    
+    # Model numbers, SKUs, specific product codes
+    if re.search(r'\b[A-Z0-9]{4,}[-_]?[A-Z0-9]+\b', keyword, re.IGNORECASE):
+        return MatchType.EXACT, 0.9
+    
+    # Very specific long-tail with high purchase intent (4+ words)
+    if word_count >= 4 and indicators_found["high_purchase_intent"] >= 1:
+        return MatchType.EXACT, 0.85
+    
+    # Phone numbers, zip codes, specific addresses
+    if re.search(r'\b\d{3}[-.]?\d{3}[-.]?\d{4}\b|\b\d{5}\b', keyword):
+        return MatchType.EXACT, 0.9
+    
+    # 3. PHRASE MATCH SCENARIOS (balanced reach and relevance)
+    
+    # Location + Service combinations
+    if indicators_found["location_indicators"] >= 1 and indicators_found["service_indicators"] >= 1:
+        return MatchType.PHRASE, 0.8
+    
+    # Comparison and research queries
+    if indicators_found["comparison_research"] >= 1:
+        return MatchType.PHRASE, 0.75
+    
+    # Medium-tail keywords (2-3 words) with clear intent
+    if 2 <= word_count <= 3:
+        if indicators_found["high_purchase_intent"] >= 1:
+            # Purchase intent but not super specific
+            return MatchType.PHRASE, 0.8
+        elif indicators_found["service_indicators"] >= 1:
+            # Service-related searches
+            return MatchType.PHRASE, 0.75
+    
+    # Informational queries that could lead to conversions
+    if indicators_found["informational_learning"] >= 1 and word_count >= 3:
+        return MatchType.PHRASE, 0.7
+    
+    # 4. BROAD MATCH SCENARIOS (only with sufficient data)
+    
+    # Check if broad match is appropriate
+    can_use_broad = (
+        account_maturity in ["GROWING", "MATURE"] and
+        has_conversion_data and
+        use_smart_bidding
+    )
+    
+    if can_use_broad:
+        # High-volume generic terms for discovery
+        if word_count == 1 and avg_searches > 5000:
+            if campaign_goal in ["DISCOVERY", "AWARENESS"]:
+                return MatchType.BROAD, 0.6
+        
+        # Category-level keywords with good volume
+        if word_count <= 2 and avg_searches > 1000 and competition != "HIGH":
+            if account_maturity == "MATURE":
+                return MatchType.BROAD, 0.65
+    
+    # 5. VOLUME-BASED DECISIONS
+    
+    # Very low volume - use EXACT to accumulate data
+    if avg_searches < 100:
+        return MatchType.EXACT, 0.7
+    
+    # High volume with high competition - be more restrictive
+    if avg_searches > 10000 and competition == "HIGH":
+        if word_count >= 2:
+            return MatchType.PHRASE, 0.75
+        else:
+            return MatchType.EXACT, 0.7
+    
+    # 6. DEFAULT FALLBACKS
+    
+    # Default for new accounts - PHRASE (safe middle ground)
+    if account_maturity == "NEW":
+        return MatchType.PHRASE, 0.65
+    
+    # Default based on word count
+    if word_count >= 4:
+        return MatchType.EXACT, 0.7
+    elif word_count >= 2:
+        return MatchType.PHRASE, 0.65
+    else:
+        # Single word - be careful
+        if account_maturity == "MATURE" and has_conversion_data:
+            return MatchType.PHRASE, 0.6
+        else:
+            return MatchType.EXACT, 0.65
+
+
+def generate_theme_prompt(keywords: List[KeywordData], landing_page_content: Optional[str] = None) -> str:
+    """
+    Generate a prompt for AI to create dynamic keyword themes based on actual keywords
+    and optionally landing page content.
+    """
+    # Extract unique keywords for analysis
+    keyword_list = [kw.keyword for kw in keywords]
+    
+    # Build statistics about the keywords
+    avg_word_count = sum(len(k.split()) for k in keyword_list) / len(keyword_list)
+    total_volume = sum(kw.avg_searches for kw in keywords)
+    
+    prompt = f"""
+    Analyze these {len(keyword_list)} keywords and create logical theme groups for Google Ads campaigns.
+    
+    Keywords to analyze:
+    {', '.join(keyword_list[:50])}  # First 50 as sample
+    {'... and ' + str(len(keyword_list) - 50) + ' more' if len(keyword_list) > 50 else ''}
+    
+    Statistics:
+    - Total keywords: {len(keyword_list)}
+    - Average word count: {avg_word_count:.1f}
+    - Total search volume: {total_volume:,}
+    
+    {f"Landing Page Context: {landing_page_content[:500]}..." if landing_page_content else ""}
+    
+    Create 5-15 theme groups following these guidelines:
+    1. Each theme should be a Single Theme Ad Group (STAG) - tightly focused
+    2. Group by user intent and search behavior, not just keyword similarity
+    3. Consider the customer journey stage (awareness, consideration, decision)
+    4. Separate high-intent from research/informational queries
+    5. Keep brand terms separate if present
+    6. Consider creating themes for different match types if warranted
+    
+    For each theme, provide:
+    - Theme name (descriptive, 2-4 words)
+    - Intent level (High, Medium, Low)
+    - Recommended match type tendency (Exact, Phrase, or Mixed)
+    - Example keywords that would fit
+    
+    Return as a structured list of themes.
+    """
+    
+    return prompt
 
 # --- Environment Variables ---
 
