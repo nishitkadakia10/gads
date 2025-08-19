@@ -33,7 +33,7 @@ import requests
 # AI imports for ad copy generation
 from openai import OpenAI
 client = OpenAI()
-from anthropic import Anthropic
+import anthropic
 
 # Google Sheets imports
 import gspread
@@ -1024,119 +1024,195 @@ async def generate_ad_copy(
         variations = {}
         
         # Generate with OpenAI (structured output)
-        if openai_client:
-            try:
-                class AdCopyResponse(BaseModel):
-                    headlines: List[str] = Field(description="15 headlines, 15-30 chars each")
-                    descriptions: List[str] = Field(description="4 descriptions, 80-90 chars each")
-                
-                prompt = f"""
-                Create Google Ads copy for {theme} theme.
-                Keywords: {', '.join(top_keywords)}
-                {'Context: ' + content[:500] if content else ''}
-                
-                Requirements:
-                - 15 headlines: Each MUST be 15-30 characters
-                - 4 descriptions: Each MUST be 80-90 characters
-                - Include keywords naturally
-                - Strong call-to-action
-                - Highlight benefits and value
-                """
-                
-                response = client.chat.completions.create(
-                  model="gpt-5",
-                  messages=[
-                    {
-                      "role": "developer",
-                      "content": [
+        # Generate with OpenAI (structured output)
+if openai_client:
+    try:
+        prompt = f"""
+        Create Google Ads copy for {theme} theme.
+        Keywords: {', '.join(top_keywords)}
+        {'Context: ' + content[:500] if content else ''}
+        
+        Requirements:
+        - 15 headlines: Each MUST be 15-30 characters
+        - 4 descriptions: Each MUST be 80-90 characters
+        - Include keywords naturally
+        - Strong call-to-action
+        - Highlight benefits and value
+        """
+        
+        response = openai_client.responses.create(
+            model="gpt-5-chat-latest",
+            input=[
+                {
+                    "role": "system",
+                    "content": [
                         {
-                          "type": "text",
-                          "text": "Write compelling, concise Google Ads copy to maximize engagement and conversions.  \n- Objective: Produce advertising text for Google Ads campaigns, adhering to best practices for keyword integration, call-to-action (CTA), and value proposition.  \n- Requirements:  \n  - Provide exactly 15 unique headlines (each 15–30 characters; mandatory character limit).  \n  - Provide exactly 4 unique descriptions (each 80–90 characters; mandatory character limit).  \n  - Each headline and description must:  \n    - Naturally incorporate relevant keywords.  \n    - Include a strong CTA.  \n    - Clearly highlight the core benefits and unique value of the product/service.  \n- Ensure copy is engaging, avoids repetition, and stands out competitively.  \n- Only output the requested items—do not include explanations or additional content.  \n- Reasoning Order:  \n  - First, plan main product/service benefits, value, and potential keywords.  \n  - Next, internally consider how to fit those elements naturally into short headlines and precise descriptions.  \n  - Only after reasoning, generate the finalized ad copy content as requested.  \n- Persistence: If you cannot generate enough outputs that meet all constraints, repeat your process and revise until all requirements are fully met before finalizing the answer.\n\n**Output Format:**  \nRespond in this JSON structure (no markdown or additional commentary):  \n{\n  \"headlines\": [\n    \"[headline1: 15-30 chars]\",\n    \"...\",\n    \"[headline15: 15-30 chars]\"\n  ],\n  \"descriptions\": [\n    \"[description1: 80-90 chars]\",\n    \"...\",\n    \"[description4: 80-90 chars]\"\n  ]\n}"
+                            "type": "input_text",
+                            "text": "Write compelling, concise Google Ads copy to maximize engagement and conversions.\n- Objective: Produce advertising text for Google Ads campaigns, adhering to best practices for keyword integration, call-to-action (CTA), and value proposition.\n- Requirements:\n  - Provide exactly 15 unique headlines (each 15-30 characters; mandatory character limit).\n  - Provide exactly 4 unique descriptions (each 80-90 characters; mandatory character limit).\n  - Each headline and description must:\n    - Naturally incorporate relevant keywords.\n    - Include a strong CTA.\n    - Clearly highlight the core benefits and unique value of the product/service.\n- Ensure copy is engaging, avoids repetition, and stands out competitively.\n- Only output the requested items—do not include explanations or additional content.\n- Reasoning Order:\n  - First, plan main product/service benefits, value, and potential keywords.\n  - Next, internally consider how to fit those elements naturally into short headlines and precise descriptions.\n  - Only after reasoning, generate the finalized ad copy content as requested.\n- Persistence: If you cannot generate enough outputs that meet all constraints, repeat your process and revise until all requirements are fully met before finalizing the answer.\n\n**Output Format:**\nRespond in this JSON structure (no markdown or additional commentary):\n{\n  \"headlines\": [\n    \"[headline1: 15-30 chars]\",\n    \"...\",\n    \"[headline15: 15-30 chars]\"\n  ],\n  \"descriptions\": [\n    \"[description1: 80-90 chars]\",\n    \"...\",\n    \"[description4: 80-90 chars]\"\n  ]\n}"
                         }
-                      ]
-                    },
-                    {
-                      "role": "user",
-                      "content": prompt
-                    }
-                  ],
-                  response_format={
-                    "type": "text"
-                  },
-                  verbosity="low",
-                  reasoning_effort="medium"
-                )
-                
-                result = json.loads(response.choices[0].message.content)
-                variations["gpt"] = AdCopyVariation(
-                    headlines=result["headlines"],
-                    descriptions=result["descriptions"]
-                ).model_dump()
-                
-                logger.info(f"✅ GPT generated copy for {theme}")
-            except Exception as e:
-                logger.error(f"❌ OpenAI error: {str(e)}")
+                    ]
+                },
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "input_text",
+                            "text": prompt
+                        }
+                    ]
+                }
+            ],
+            text={},
+            reasoning={},
+            tools=[],
+            temperature=0.3,
+            max_output_tokens=5000,
+            top_p=0.9,
+            store=True
+        )
+        
+        # Extract the response text - note the structure might be different
+        if hasattr(response, 'content'):
+            # If response has content attribute
+            response_text = response.content[0].text if response.content else ""
+        elif hasattr(response, 'choices'):
+            # If it follows the older structure
+            response_text = response.choices[0].message.content
+        else:
+            # Direct text response
+            response_text = str(response)
+        
+        # Remove markdown code blocks if present
+        response_text = response_text.replace("```json", "").replace("```", "").strip()
+        
+        # Parse JSON
+        result = json.loads(response_text)
+        
+        variations["gpt"] = AdCopyVariation(
+            headlines=result["headlines"][:15],  # Ensure max 15
+            descriptions=result["descriptions"][:4]  # Ensure max 4
+        ).model_dump()
+        
+        logger.info(f"✅ GPT generated copy for {theme}")
+        
+    except Exception as e:
+        logger.error(f"❌ OpenAI error: {str(e)}")
+        logger.error(f"Response structure: {response.__dict__ if 'response' in locals() else 'No response'}")
         
         # Generate with Claude
         if anthropic_client:
-            try:
-                prompt = f"""
-                Create Google Ads copy for {theme} theme.
-                Keywords: {', '.join(top_keywords)}
-                {'Context: ' + content[:500] if content else ''}
+        try:
+        # Build the system prompt with proper formatting
+            system_prompt = """Write compelling, concise Google Ads copy to maximize engagement and conversions.
+                            - Objective: Produce advertising text for Google Ads campaigns, adhering to best practices for keyword integration, call-to-action (CTA), and value proposition.
+                            - Requirements:
+                              - Provide exactly 15 unique headlines (each 15-30 characters; mandatory character limit).
+                              - Provide exactly 4 unique descriptions (each 80-90 characters; mandatory character limit).
+                              - Each headline and description must:
+                                - Naturally incorporate relevant keywords.
+                                - Include a strong CTA.
+                                - Clearly highlight the core benefits and unique value of the product/service.
+                            - Ensure copy is engaging, avoids repetition, and stands out competitively.
+                            - Only output the requested items—do not include explanations or additional content.
+                            - Reasoning Order:
+                              - First, plan main product/service benefits, value, and potential keywords.
+                              - Next, internally consider how to fit those elements naturally into short headlines and precise descriptions.
+                              - Only after reasoning, generate the finalized ad copy content as requested.
+                            - Persistence: If you cannot generate enough outputs that meet all constraints, repeat your process and revise until all requirements are fully met before finalizing the answer.
+                            
+                            **Output Format:**
+                            Respond in this JSON structure (no markdown or additional commentary):
+                            {
+                              "headlines": [
+                                "[headline1: 15-30 chars]",
+                                "...",
+                                "[headline15: 15-30 chars]"
+                              ],
+                              "descriptions": [
+                                "[description1: 80-90 chars]",
+                                "...",
+                                "[description4: 80-90 chars]"
+                              ]
+                            }"""
+                    # Build the user prompt
+                    user_prompt = f"""
+                    Create Google Ads copy for {theme} theme.
+                    Keywords: {', '.join(top_keywords)}
+                    {'Context: ' + content[:500] if content else ''}
+                    
+                    Requirements:
+                    - 15 headlines: Each MUST be 15-30 characters
+                    - 4 descriptions: Each MUST be 80-90 characters
+                    - Include keywords naturally
+                    - Strong call-to-action
+                    - Highlight benefits and value
+                    """
                 
-                Return JSON with this exact structure:
-                {{
-                    "headlines": ["15 headlines, 15-30 chars each"],
-                    "descriptions": ["4 descriptions, 80-90 chars each"]
-                }}
-                
-                Requirements:
-                - Headlines: EXACTLY 15-30 characters each
-                - Descriptions: EXACTLY 80-90 characters each
-                - Include keywords naturally
-                - Strong call-to-action
-                """
-                
-                response = anthropic_client.messages.create(
+                message = anthropic_client.messages.create(
                     model="claude-opus-4-1-20250805",
                     max_tokens=5000,
-                    messages=[{"role": "user", "content": prompt}]
+                    temperature=0.3,  # Lower temperature for more consistent output
+                    system=system_prompt,
+                    messages=[
+                        {
+                            "role": "user",
+                            "content": [
+                                {
+                                    "type": "text",
+                                    "text": user_prompt
+                                }
+                            ]
+                        }
+                    ]
                 )
                 
-                text = response.content[0].text
-                json_match = re.search(r'\{.*\}', text, re.DOTALL)
-                if json_match:
-                    result = json.loads(json_match.group())
-                    variations["claude"] = AdCopyVariation(
-                        headlines=result["headlines"],
-                        descriptions=result["descriptions"]
-                    ).model_dump()
-                    
-                    logger.info(f"✅ Claude generated copy for {theme}")
+                # Extract the response text
+                response_text = message.content[0].text if message.content else ""
+                
+                # Try to extract JSON from the response
+                # First try to parse the entire response as JSON
+                try:
+                    result = json.loads(response_text)
+                except json.JSONDecodeError:
+                    # If that fails, look for JSON within the text
+                    json_match = re.search(r'\{.*\}', response_text, re.DOTALL)
+                    if json_match:
+                        result = json.loads(json_match.group())
+                    else:
+                        raise ValueError("No valid JSON found in Claude's response")
+                
+                # Validate and store the results
+                variations["claude"] = AdCopyVariation(
+                    headlines=result.get("headlines", [])[:15],  # Ensure max 15
+                    descriptions=result.get("descriptions", [])[:4]  # Ensure max 4
+                ).model_dump()
+                
+                logger.info(f"✅ Claude generated copy for {theme}")
+                
             except Exception as e:
                 logger.error(f"❌ Claude error: {str(e)}")
+                if 'response_text' in locals():
+                    logger.error(f"Claude response: {response_text[:500]}")  # Log first 500 chars for debugging
         
         if variations:
             ad_copies[theme] = variations
-    
-    if not ad_copies:
+        
+        if not ad_copies:
+            return {
+                "status": "error",
+                "message": "❌ Failed to generate ad copy. Check AI service logs."
+            }
+        
+        # Store in state
+        state_manager.set(conversation_id, "ad_copies", ad_copies)
+        
         return {
-            "status": "error",
-            "message": "❌ Failed to generate ad copy. Check AI service logs."
+            "status": "success",
+            "conversation_id": conversation_id,
+            "themes_generated": len(ad_copies),
+            "ad_copies": ad_copies,
+            "next_action": "Use 'create_campaign_sheet' to export to Google Sheets"
         }
-    
-    # Store in state
-    state_manager.set(conversation_id, "ad_copies", ad_copies)
-    
-    return {
-        "status": "success",
-        "conversation_id": conversation_id,
-        "themes_generated": len(ad_copies),
-        "ad_copies": ad_copies,
-        "next_action": "Use 'create_campaign_sheet' to export to Google Sheets"
-    }
-
 @mcp.tool()
 async def direct_ad_copy_input(
     ad_copies: Dict = Field(description="Ad copy variations by theme"),
