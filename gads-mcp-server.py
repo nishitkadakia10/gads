@@ -16,6 +16,7 @@ from typing import Any, Optional, Literal, Dict, List, Union, Tuple
 from datetime import datetime, timezone
 from dateutil import parser
 from enum import Enum
+from dataclasses import dataclass
 
 # Suppress deprecation warnings
 warnings.filterwarnings("ignore", category=DeprecationWarning)
