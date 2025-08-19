@@ -69,19 +69,21 @@ class MatchType(str, Enum):
     BROAD = "BROAD"
     PHRASE = "PHRASE"
     EXACT = "EXACT"
+
+class CompetitionLevel(str, Enum):
+    UNKNOWN = "UNKNOWN"
+    LOW = "LOW"
+    MEDIUM = "MEDIUM"
+    HIGH = "HIGH"
+
+class WorkflowStage(str, Enum):
+    URL_INPUT = "URL_INPUT"
+    KEYWORD_RESEARCH = "KEYWORD_RESEARCH"
+    AD_COPY_GENERATION = "AD_COPY_GENERATION"
+    SHEET_CREATION = "SHEET_CREATION"
+    PLATFORM_POSTING = "PLATFORM_POSTING"
     
 @dataclass
-class KeywordData:
-    keyword: str
-    match_type: Optional[MatchType] = None
-    avg_searches: int = 0
-    competition: str = "MEDIUM"
-    theme: Optional[str] = None
-    confidence_score: float = 0.0  # How confident we are in the match type
-
-
-# --- Data Models ---
-
 class KeywordData(BaseModel):
     """Enhanced keyword model with all metadata"""
     keyword: str
@@ -92,8 +94,11 @@ class KeywordData(BaseModel):
     low_top_of_page_bid: Optional[float] = None
     high_top_of_page_bid: Optional[float] = None
     theme: Optional[str] = None
-    intent: Optional[IntentType] = None
     relevance_score: Optional[float] = None
+    confidence_score: float = 0.7  # Added from the streamlined version
+
+
+# --- Data Models ---
 
 class AdCopyVariation(BaseModel):
     """Model for ad copy variations"""
@@ -443,7 +448,7 @@ def determine_match_type(
         else:
             return MatchType.EXACT, 0.65
 
-
+# Update the generate_theme_prompt function to fix the avg_searches reference
 def generate_theme_prompt(keywords: List[KeywordData], landing_page_content: Optional[str] = None) -> str:
     """
     Generate a prompt for AI to create dynamic keyword themes based on actual keywords
@@ -453,8 +458,9 @@ def generate_theme_prompt(keywords: List[KeywordData], landing_page_content: Opt
     keyword_list = [kw.keyword for kw in keywords]
     
     # Build statistics about the keywords
-    avg_word_count = sum(len(k.split()) for k in keyword_list) / len(keyword_list)
-    total_volume = sum(kw.avg_searches for kw in keywords)
+    avg_word_count = sum(len(k.split()) for k in keyword_list) / len(keyword_list) if keyword_list else 0
+    # Fix: Use avg_monthly_searches instead of avg_searches
+    total_volume = sum(kw.avg_monthly_searches for kw in keywords)
     
     prompt = f"""
     Analyze these {len(keyword_list)} keywords and create logical theme groups for Google Ads campaigns.
@@ -745,8 +751,7 @@ def get_keyword_ideas_from_api(
                     competition=CompetitionLevel(competition),
                     competition_index=comp_index,
                     low_top_of_page_bid=low_bid,
-                    high_top_of_page_bid=high_bid,
-                    intent=intent
+                    high_top_of_page_bid=high_bid
                 )
                 
                 keyword_ideas.append(keyword_data)
