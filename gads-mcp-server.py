@@ -95,7 +95,7 @@ class KeywordData(BaseModel):
     high_top_of_page_bid: Optional[float] = None
     theme: Optional[str] = None
     relevance_score: Optional[float] = None
-    confidence_score: float = 0.7  # Added from the streamlined version
+    confidence_score: float = 0.7  # Default value
 
 
 # --- Data Models ---
@@ -839,7 +839,6 @@ async def keyword_research(
 ) -> Dict:
     """
     Research keywords using Google Ads API to get search volume and competition data.
-    Groups keywords by themes and assigns intelligent match types.
     NO FALLBACK - fails clearly if API doesn't work.
     """
     logger.info(f"🔍 Researching {len(keywords)} keywords")
@@ -877,8 +876,8 @@ async def keyword_research(
                 "message": "❌ No keyword data returned from Google Ads API"
             }
         
-        # Group keywords by theme
-        themed_keywords = group_keywords_by_theme(keyword_data_list)
+        # REMOVED: Group keywords by theme
+        # themed_keywords = group_keywords_by_theme(keyword_data_list)
         
         # Store in state
         state_manager.set(conv_id, "keywords", [kw.model_dump() for kw in keyword_data_list])
@@ -901,15 +900,8 @@ async def keyword_research(
             "total_monthly_searches": total_searches,
             "avg_monthly_searches": avg_searches,
             "match_type_distribution": match_type_dist,
-            "themes": list(themed_keywords.keys()),
-            "keyword_groups": {
-                theme: {
-                    "count": len(kws),
-                    "total_searches": sum(k.avg_monthly_searches for k in kws),
-                    "keywords": [k.model_dump() for k in kws[:5]]  # Top 5 per theme
-                }
-                for theme, kws in themed_keywords.items()
-            },
+            # REMOVED: "themes": list(themed_keywords.keys()),
+            # Simplified keyword groups - just return all keywords
             "all_keywords": [kw.model_dump() for kw in keyword_data_list]
         }
         
@@ -921,7 +913,7 @@ async def keyword_research(
         }
 
 @mcp.tool()
-async def direct_keyword_input(
+async def async def direct_keyword_input(
     keywords: List[Dict] = Field(description="List of keywords with match types"),
     conversation_id: Optional[str] = Field(default=None, description="Conversation ID")
 ) -> Dict:
@@ -937,16 +929,23 @@ async def direct_keyword_input(
     # Convert to KeywordData objects
     keyword_data_list = []
     for kw in keywords:
+        # Create keyword data with available fields
         keyword_data = KeywordData(
             keyword=kw.get("keyword", "").lower(),
             match_type=MatchType(kw.get("match_type", "PHRASE")),
             avg_monthly_searches=kw.get("avg_monthly_searches", 0),
-            competition=CompetitionLevel(kw.get("competition", "UNKNOWN"))
+            competition=CompetitionLevel(kw.get("competition", "UNKNOWN")),
+            competition_index=kw.get("competition_index"),  # Optional, can be None
+            low_top_of_page_bid=kw.get("low_top_of_page_bid"),  # Optional, can be None
+            high_top_of_page_bid=kw.get("high_top_of_page_bid"),  # Optional, can be None
+            theme=kw.get("theme"),  # Optional, can be None
+            relevance_score=kw.get("relevance_score"),  # Optional, can be None
+            confidence_score=kw.get("confidence_score", 0.7)  # Has default
         )
         keyword_data_list.append(keyword_data)
     
-    # Group by themes
-    themed_keywords = group_keywords_by_theme(keyword_data_list)
+    # If you have group_keywords_by_theme, use it, otherwise skip
+    # themed_keywords = group_keywords_by_theme(keyword_data_list)
     
     # Store in state
     state_manager.set(conv_id, "keywords", [kw.model_dump() for kw in keyword_data_list])
@@ -955,7 +954,7 @@ async def direct_keyword_input(
         "status": "success",
         "conversation_id": conv_id,
         "message": f"✅ Stored {len(keyword_data_list)} keywords",
-        "themes": list(themed_keywords.keys()),
+        # "themes": list(themed_keywords.keys()) if themed_keywords else [],
         "next_action": "Use 'generate_ad_copy' to create ad variations"
     }
 
