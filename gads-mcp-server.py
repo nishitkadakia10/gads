@@ -1044,8 +1044,8 @@ async def generate_ad_copy(
                   response_format={
                     "type": "text"
                   },
-                  verbosity="high",
-                  reasoning_effort="high"
+                  verbosity="low",
+                  reasoning_effort="medium"
                 )
                 
                 result = json.loads(response.choices[0].message.content)
