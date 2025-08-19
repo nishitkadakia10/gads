@@ -1102,51 +1102,52 @@ if openai_client:
         # Generate with Claude
         if anthropic_client:
             try:
-            # Build the system prompt with proper formatting
+                # Build the system prompt with proper formatting
                 system_prompt = """Write compelling, concise Google Ads copy to maximize engagement and conversions.
-                                - Objective: Produce advertising text for Google Ads campaigns, adhering to best practices for keyword integration, call-to-action (CTA), and value proposition.
-                                - Requirements:
-                                  - Provide exactly 15 unique headlines (each 15-30 characters; mandatory character limit).
-                                  - Provide exactly 4 unique descriptions (each 80-90 characters; mandatory character limit).
-                                  - Each headline and description must:
-                                    - Naturally incorporate relevant keywords.
-                                    - Include a strong CTA.
-                                    - Clearly highlight the core benefits and unique value of the product/service.
-                                - Ensure copy is engaging, avoids repetition, and stands out competitively.
-                                - Only output the requested items—do not include explanations or additional content.
-                                - Reasoning Order:
-                                  - First, plan main product/service benefits, value, and potential keywords.
-                                  - Next, internally consider how to fit those elements naturally into short headlines and precise descriptions.
-                                  - Only after reasoning, generate the finalized ad copy content as requested.
-                                - Persistence: If you cannot generate enough outputs that meet all constraints, repeat your process and revise until all requirements are fully met before finalizing the answer.
-                                
-                                **Output Format:**
-                                Respond in this JSON structure (no markdown or additional commentary):
-                                {
-                                  "headlines": [
-                                    "[headline1: 15-30 chars]",
-                                    "...",
-                                    "[headline15: 15-30 chars]"
-                                  ],
-                                  "descriptions": [
-                                    "[description1: 80-90 chars]",
-                                    "...",
-                                    "[description4: 80-90 chars]"
-                                  ]
-                                }"""
-                        # Build the user prompt
-                        user_prompt = f"""
-                        Create Google Ads copy for {theme} theme.
-                        Keywords: {', '.join(top_keywords)}
-                        {'Context: ' + content[:500] if content else ''}
-                        
-                        Requirements:
-                        - 15 headlines: Each MUST be 15-30 characters
-                        - 4 descriptions: Each MUST be 80-90 characters
-                        - Include keywords naturally
-                        - Strong call-to-action
-                        - Highlight benefits and value
-                        """
+- Objective: Produce advertising text for Google Ads campaigns, adhering to best practices for keyword integration, call-to-action (CTA), and value proposition.
+- Requirements:
+  - Provide exactly 15 unique headlines (each 15-30 characters; mandatory character limit).
+  - Provide exactly 4 unique descriptions (each 80-90 characters; mandatory character limit).
+  - Each headline and description must:
+    - Naturally incorporate relevant keywords.
+    - Include a strong CTA.
+    - Clearly highlight the core benefits and unique value of the product/service.
+- Ensure copy is engaging, avoids repetition, and stands out competitively.
+- Only output the requested items—do not include explanations or additional content.
+- Reasoning Order:
+  - First, plan main product/service benefits, value, and potential keywords.
+  - Next, internally consider how to fit those elements naturally into short headlines and precise descriptions.
+  - Only after reasoning, generate the finalized ad copy content as requested.
+- Persistence: If you cannot generate enough outputs that meet all constraints, repeat your process and revise until all requirements are fully met before finalizing the answer.
+
+**Output Format:**
+Respond in this JSON structure (no markdown or additional commentary):
+{
+  "headlines": [
+    "[headline1: 15-30 chars]",
+    "...",
+    "[headline15: 15-30 chars]"
+  ],
+  "descriptions": [
+    "[description1: 80-90 chars]",
+    "...",
+    "[description4: 80-90 chars]"
+  ]
+}"""
+                
+                # Build the user prompt
+                user_prompt = f"""
+Create Google Ads copy for {theme} theme.
+Keywords: {', '.join(top_keywords)}
+{'Context: ' + content[:500] if content else ''}
+
+Requirements:
+- 15 headlines: Each MUST be 15-30 characters
+- 4 descriptions: Each MUST be 80-90 characters
+- Include keywords naturally
+- Strong call-to-action
+- Highlight benefits and value
+"""
                 
                 message = anthropic_client.messages.create(
                     model="claude-opus-4-1-20250805",
@@ -1196,23 +1197,23 @@ if openai_client:
         
         if variations:
             ad_copies[theme] = variations
-        
-        if not ad_copies:
-            return {
-                "status": "error",
-                "message": "❌ Failed to generate ad copy. Check AI service logs."
-            }
-        
-        # Store in state
-        state_manager.set(conversation_id, "ad_copies", ad_copies)
-        
+    
+    if not ad_copies:
         return {
-            "status": "success",
-            "conversation_id": conversation_id,
-            "themes_generated": len(ad_copies),
-            "ad_copies": ad_copies,
-            "next_action": "Use 'create_campaign_sheet' to export to Google Sheets"
+            "status": "error",
+            "message": "❌ Failed to generate ad copy. Check AI service logs."
         }
+    
+    # Store in state
+    state_manager.set(conversation_id, "ad_copies", ad_copies)
+    
+    return {
+        "status": "success",
+        "conversation_id": conversation_id,
+        "themes_generated": len(ad_copies),
+        "ad_copies": ad_copies,
+        "next_action": "Use 'create_campaign_sheet' to export to Google Sheets"
+    }
 @mcp.tool()
 async def direct_ad_copy_input(
     ad_copies: Dict = Field(description="Ad copy variations by theme"),
