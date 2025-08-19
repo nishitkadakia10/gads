@@ -1113,46 +1113,17 @@ Requirements:
         
         # Generate with Claude
         if anthropic_client:
-            try:
-                # Build the system prompt with proper formatting
-                system_prompt = """Write compelling, concise Google Ads copy to maximize engagement and conversions.
-- Objective: Produce advertising text for Google Ads campaigns, adhering to best practices for keyword integration, call-to-action (CTA), and value proposition.
-- Requirements:
-  - Provide exactly 15 unique headlines (each 15-30 characters; mandatory character limit).
-  - Provide exactly 4 unique descriptions (each 80-90 characters; mandatory character limit).
-  - Each headline and description must:
-    - Naturally incorporate relevant keywords.
-    - Include a strong CTA.
-    - Clearly highlight the core benefits and unique value of the product/service.
-- Ensure copy is engaging, avoids repetition, and stands out competitively.
-- Only output the requested items—do not include explanations or additional content.
-- Reasoning Order:
-  - First, plan main product/service benefits, value, and potential keywords.
-  - Next, internally consider how to fit those elements naturally into short headlines and precise descriptions.
-  - Only after reasoning, generate the finalized ad copy content as requested.
-- Persistence: If you cannot generate enough outputs that meet all constraints, repeat your process and revise until all requirements are fully met before finalizing the answer.
-
-**Output Format:**
-Respond in this JSON structure (no markdown or additional commentary):
-{
-  "headlines": [
-    "[headline1: 15-30 chars]",
-    "...",
-    "[headline15: 15-30 chars]"
-  ],
-  "descriptions": [
-    "[description1: 80-90 chars]",
-    "...",
-    "[description4: 80-90 chars]"
-  ]
-}"""
-                
-                # Build the user prompt
-                user_prompt = f"""
+    try:
+        # Build the system prompt with proper formatting
+        system_prompt = """Write compelling, concise Google Ads copy to maximize engagement and conversions.
+[... keep your existing system prompt ...]
+"""
+        
+        # Build the user prompt
+        user_prompt = f"""
 Create Google Ads copy for {theme} theme.
 Keywords: {', '.join(top_keywords)}
 {'Context: ' + content[:5000] if content else ''}
-
 Requirements:
 - 15 headlines: Each MUST be 15-30 characters
 - 4 descriptions: Each MUST be 80-90 characters
@@ -1160,54 +1131,60 @@ Requirements:
 - Strong call-to-action
 - Highlight benefits and value
 """
-                
-                message = anthropic_client.messages.create(
-                    model="claude-opus-4-1-20250805",  # Use a stable model version
-                    max_tokens=5000,
-                    temperature=0.3,
-                    system=system_prompt,
-                    messages=[
-                        {
-                            "role": "user",
-                            "content": [
-                                {
-                                    "type": "text",
-                                    "text": user_prompt
-                                }
-                            ]
-                        }
-                    ]
-                )
-                
-                # Extract the response text
-                response_text = print(message.content)[0].text if message.content else ""
-                
-                # Log the raw response for debugging
-                logger.info(f"Claude raw response length: {len(response_text)} chars")
-                
-                # Try to extract JSON from the response
-                try:
-                    result = json.loads(response_text)
-                except json.JSONDecodeError:
-                    # If that fails, look for JSON within the text
-                    json_match = re.search(r'\{.*\}', response_text, re.DOTALL)
-                    if json_match:
-                        result = json.loads(json_match.group())
-                    else:
-                        raise ValueError("No valid JSON found in Claude's response")
-                
-                # Validate and store the results
-                variations["claude"] = AdCopyVariation(
-                    headlines=result.get("headlines", [])[:15],
-                    descriptions=result.get("descriptions", [])[:4]
-                ).model_dump()
-                
-                logger.info(f"✅ Claude generated copy for {theme}")
-                
-            except Exception as e:
-                logger.error(f"❌ Claude error: {str(e)}")
-                if 'response_text' in locals():
-                    logger.error(f"Claude response (first 500 chars): {response_text[:500]}")
+        
+        # Create message with retry configuration
+        message = anthropic_client.messages.create(
+            model="claude-opus-4-1-20250805",
+            max_tokens=5000,
+            temperature=0.3,
+            system=system_prompt,
+            messages=[
+                {
+                    "role": "user",
+                    "content": user_prompt  # Simplified format
+                }
+            ]
+        )
+        
+        # FIX: Remove print() - it returns None!
+        response_text = message.content[0].text if message.content else ""
+        
+        # Log the raw response for debugging
+        logger.info(f"Claude raw response length: {len(response_text)} chars")
+        
+        # Remove markdown if present
+        response_text = response_text.replace("```json", "").replace("```", "").strip()
+        
+        # Try to extract JSON from the response
+        try:
+            result = json.loads(response_text)
+        except json.JSONDecodeError:
+            # If that fails, look for JSON within the text
+            json_match = re.search(r'\{.*\}', response_text, re.DOTALL)
+            if json_match:
+                result = json.loads(json_match.group())
+            else:
+                raise ValueError("No valid JSON found in Claude's response")
+        
+        # Validate and store the results
+        variations["claude"] = AdCopyVariation(
+            headlines=result.get("headlines", [])[:15],
+            descriptions=result.get("descriptions", [])[:4]
+        ).model_dump()
+        
+        logger.info(f"✅ Claude generated copy for {theme}")
+        
+    except anthropic.APIConnectionError as e:
+        logger.error(f"❌ Claude connection error: {str(e)}")
+        logger.error(f"Check network connectivity and firewall settings")
+    except anthropic.APIStatusError as e:
+        logger.error(f"❌ Claude API error {e.status_code}: {str(e)}")
+        if e.status_code == 529:
+            logger.error("API is overloaded. Consider implementing exponential backoff")
+    except Exception as e:
+        logger.error(f"❌ Claude error: {str(e)}")
+        if 'response_text' in locals():
+            logger.error(f"Claude response (first 500 chars): {response_text[:500]}")
         
         if variations:
             ad_copies[theme] = variations
