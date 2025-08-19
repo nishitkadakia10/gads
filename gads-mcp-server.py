@@ -83,20 +83,19 @@ class WorkflowStage(str, Enum):
     SHEET_CREATION = "SHEET_CREATION"
     PLATFORM_POSTING = "PLATFORM_POSTING"
     
-@dataclass
+# Replace your ENTIRE KeywordData class definition with this:
 class KeywordData(BaseModel):
     """Enhanced keyword model with all metadata"""
     keyword: str
-    match_type: MatchType = MatchType.PHRASE
-    avg_monthly_searches: int = 0
-    competition: CompetitionLevel = CompetitionLevel.UNKNOWN
-    competition_index: Optional[int] = None
-    low_top_of_page_bid: Optional[float] = None
-    high_top_of_page_bid: Optional[float] = None
-    theme: Optional[str] = None
-    relevance_score: Optional[float] = None
-    confidence_score: float = 0.7  # Default value
-
+    match_type: MatchType = Field(default=MatchType.PHRASE)
+    avg_monthly_searches: int = Field(default=0)
+    competition: CompetitionLevel = Field(default=CompetitionLevel.UNKNOWN)
+    competition_index: Optional[int] = Field(default=None)
+    low_top_of_page_bid: Optional[float] = Field(default=None)
+    high_top_of_page_bid: Optional[float] = Field(default=None)
+    theme: Optional[str] = Field(default=None)
+    relevance_score: Optional[float] = Field(default=None)
+    confidence_score: float = Field(default=0.7)
 
 # --- Data Models ---
 
@@ -724,8 +723,6 @@ def get_keyword_ideas_from_api(
                 # Determine match type intelligently
                 match_type, confidence = determine_match_type(keyword_text, avg_searches, competition)
                 
-                # REMOVED: intent = determine_intent(keyword_text)
-                
                 # Handle bid values (might also be strings)
                 try:
                     low_bid_micros = int(metrics.get('lowTopOfPageBidMicros', 0)) if 'lowTopOfPageBidMicros' in metrics else 0
@@ -745,6 +742,7 @@ def get_keyword_ideas_from_api(
                 except (ValueError, TypeError):
                     comp_index = None
                 
+                # Create KeywordData with explicit field assignment
                 keyword_data = KeywordData(
                     keyword=keyword_text.lower(),
                     match_type=match_type,
@@ -753,8 +751,9 @@ def get_keyword_ideas_from_api(
                     competition_index=comp_index,
                     low_top_of_page_bid=low_bid,
                     high_top_of_page_bid=high_bid,
-                    confidence_score=confidence  # Add the confidence score from determine_match_type
-                    # REMOVED: intent=intent
+                    theme=None,  # Explicitly set to None
+                    relevance_score=None,  # Explicitly set to None
+                    confidence_score=confidence
                 )
                 
                 keyword_ideas.append(keyword_data)
