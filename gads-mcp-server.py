@@ -1025,8 +1025,8 @@ async def generate_ad_copy(
         
         # Generate with OpenAI (structured output)
         if openai_client:
-            try:
-                prompt = f"""
+    try:
+        prompt = f"""
 Create Google Ads copy for {theme} theme.
 Keywords: {', '.join(top_keywords)}
 {'Context: ' + content[:500] if content else ''}
@@ -1038,67 +1038,83 @@ Requirements:
 - Strong call-to-action
 - Highlight benefits and value
 """
-                
-                response = openai_client.responses.create(
-                    model="gpt-5-chat-latest",
-                    input=[
-                        {
-                            "role": "system",
-                            "content": [
-                                {
-                                    "type": "input_text",
-                                    "text": "Write compelling, concise Google Ads copy to maximize engagement and conversions.\n- Objective: Produce advertising text for Google Ads campaigns, adhering to best practices for keyword integration, call-to-action (CTA), and value proposition.\n- Requirements:\n  - Provide exactly 15 unique headlines (each 15-30 characters; mandatory character limit).\n  - Provide exactly 4 unique descriptions (each 80-90 characters; mandatory character limit).\n  - Each headline and description must:\n    - Naturally incorporate relevant keywords.\n    - Include a strong CTA.\n    - Clearly highlight the core benefits and unique value of the product/service.\n- Ensure copy is engaging, avoids repetition, and stands out competitively.\n- Only output the requested items—do not include explanations or additional content.\n- Reasoning Order:\n  - First, plan main product/service benefits, value, and potential keywords.\n  - Next, internally consider how to fit those elements naturally into short headlines and precise descriptions.\n  - Only after reasoning, generate the finalized ad copy content as requested.\n- Persistence: If you cannot generate enough outputs that meet all constraints, repeat your process and revise until all requirements are fully met before finalizing the answer.\n\n**Output Format:**\nRespond in this JSON structure (no markdown or additional commentary):\n{\n  \"headlines\": [\n    \"[headline1: 15-30 chars]\",\n    \"...\",\n    \"[headline15: 15-30 chars]\"\n  ],\n  \"descriptions\": [\n    \"[description1: 80-90 chars]\",\n    \"...\",\n    \"[description4: 80-90 chars]\"\n  ]\n}"
-                                }
-                            ]
-                        },
-                        {
-                            "role": "user",
-                            "content": [
-                                {
-                                    "type": "input_text",
-                                    "text": prompt
-                                }
-                            ]
-                        }
-                    ],
-                    text={},
-                    reasoning={},
-                    tools=[],
-                    temperature=0.3,
-                    max_output_tokens=5000,
-                    top_p=0.9,
-                    store=True
-                )
-                
-                # Extract the response text
-                if hasattr(response, 'content'):
-                    response_text = response.content[0].text if response.content else ""
-                elif hasattr(response, 'choices'):
-                    response_text = response.choices[0].message.content
-                else:
-                    response_text = str(response)
-                
-                # Remove markdown code blocks if present
-                response_text = response_text.replace("```json", "").replace("```", "").strip()
-                
-                # Parse JSON
-                result = json.loads(response_text)
-                
-                variations["gpt"] = AdCopyVariation(
-                    headlines=result["headlines"][:15],
-                    descriptions=result["descriptions"][:4]
-                ).model_dump()
-                
-                logger.info(f"✅ GPT generated copy for {theme}")
-                
-            except Exception as e:
-                logger.error(f"❌ OpenAI error: {str(e)}")
         
-        # Generate with Claude
-        if anthropic_client:
-            try:
-                # Build the system prompt with proper formatting
-                system_prompt = """Write compelling, concise Google Ads copy to maximize engagement and conversions.
+        response = openai_client.responses.create(
+            model="gpt-5-chat-latest",
+            input=[
+                {
+                    "role": "system",
+                    "content": [
+                        {
+                            "type": "input_text",
+                            "text": "Write compelling, concise Google Ads copy to maximize engagement and conversions.\n- Objective: Produce advertising text for Google Ads campaigns, adhering to best practices for keyword integration, call-to-action (CTA), and value proposition.\n- Requirements:\n  - Provide exactly 15 unique headlines (each 15-30 characters; mandatory character limit).\n  - Provide exactly 4 unique descriptions (each 80-90 characters; mandatory character limit).\n  - Each headline and description must:\n    - Naturally incorporate relevant keywords.\n    - Include a strong CTA.\n    - Clearly highlight the core benefits and unique value of the product/service.\n- Ensure copy is engaging, avoids repetition, and stands out competitively.\n- Only output the requested items—do not include explanations or additional content.\n- Reasoning Order:\n  - First, plan main product/service benefits, value, and potential keywords.\n  - Next, internally consider how to fit those elements naturally into short headlines and precise descriptions.\n  - Only after reasoning, generate the finalized ad copy content as requested.\n- Persistence: If you cannot generate enough outputs that meet all constraints, repeat your process and revise until all requirements are fully met before finalizing the answer.\n\n**Output Format:**\nRespond in this JSON structure (no markdown or additional commentary):\n{\n  \"headlines\": [\n    \"[headline1: 15-30 chars]\",\n    \"...\",\n    \"[headline15: 15-30 chars]\"\n  ],\n  \"descriptions\": [\n    \"[description1: 80-90 chars]\",\n    \"...\",\n    \"[description4: 80-90 chars]\"\n  ]\n}"
+                        }
+                    ]
+                },
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "input_text",
+                            "text": prompt
+                        }
+                    ]
+                }
+            ],
+            text={},
+            reasoning={},
+            tools=[],
+            temperature=0.3,
+            max_output_tokens=5000,
+            top_p=0.9,
+            store=True
+        )
+        
+        # Extract the response text from GPT-5 response structure
+        response_text = ""
+        if hasattr(response, 'output') and response.output:
+            # GPT-5 new structure
+            for output in response.output:
+                if hasattr(output, 'content'):
+                    for content_item in output.content:
+                        if hasattr(content_item, 'text'):
+                            response_text += content_item.text
+        elif hasattr(response, 'content'):
+            # Fallback to other structure
+            response_text = response.content[0].text if response.content else ""
+        elif hasattr(response, 'choices'):
+            # Old structure
+            response_text = response.choices[0].message.content
+        else:
+            response_text = str(response)
+        
+        # Log the raw response for debugging
+        logger.info(f"GPT raw response length: {len(response_text)} chars")
+        
+        # Remove markdown code blocks if present
+        response_text = response_text.replace("```json", "").replace("```", "").strip()
+        
+        # Parse JSON
+        result = json.loads(response_text)
+        
+        variations["gpt"] = AdCopyVariation(
+            headlines=result["headlines"][:15],
+            descriptions=result["descriptions"][:4]
+        ).model_dump()
+        
+        logger.info(f"✅ GPT generated copy for {theme}")
+        
+    except json.JSONDecodeError as e:
+        logger.error(f"❌ OpenAI JSON parsing error: {str(e)}")
+        logger.error(f"GPT response (first 500 chars): {response_text[:500]}")
+    except Exception as e:
+        logger.error(f"❌ OpenAI error: {str(e)}")
+
+# Generate with Claude
+if anthropic_client:
+    try:
+        # Build the system prompt with proper formatting
+        system_prompt = """Write compelling, concise Google Ads copy to maximize engagement and conversions.
 - Objective: Produce advertising text for Google Ads campaigns, adhering to best practices for keyword integration, call-to-action (CTA), and value proposition.
 - Requirements:
   - Provide exactly 15 unique headlines (each 15-30 characters; mandatory character limit).
@@ -1129,9 +1145,9 @@ Respond in this JSON structure (no markdown or additional commentary):
     "[description4: 80-90 chars]"
   ]
 }"""
-                
-                # Build the user prompt
-                user_prompt = f"""
+        
+        # Build the user prompt
+        user_prompt = f"""
 Create Google Ads copy for {theme} theme.
 Keywords: {', '.join(top_keywords)}
 {'Context: ' + content[:500] if content else ''}
@@ -1143,51 +1159,54 @@ Requirements:
 - Strong call-to-action
 - Highlight benefits and value
 """
-                
-                message = anthropic_client.messages.create(
-                    model="claude-opus-4-1-20250805",
-                    max_tokens=5000,
-                    temperature=0.3,
-                    system=system_prompt,
-                    messages=[
+        
+        message = anthropic_client.messages.create(
+            model="claude-3-opus-20240229",  # Use a stable model version
+            max_tokens=5000,
+            temperature=0.3,
+            system=system_prompt,
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
                         {
-                            "role": "user",
-                            "content": [
-                                {
-                                    "type": "text",
-                                    "text": user_prompt
-                                }
-                            ]
+                            "type": "text",
+                            "text": user_prompt
                         }
                     ]
-                )
-                
-                # Extract the response text
-                response_text = message.content[0].text if message.content else ""
-                
-                # Try to extract JSON from the response
-                try:
-                    result = json.loads(response_text)
-                except json.JSONDecodeError:
-                    # If that fails, look for JSON within the text
-                    json_match = re.search(r'\{.*\}', response_text, re.DOTALL)
-                    if json_match:
-                        result = json.loads(json_match.group())
-                    else:
-                        raise ValueError("No valid JSON found in Claude's response")
-                
-                # Validate and store the results
-                variations["claude"] = AdCopyVariation(
-                    headlines=result.get("headlines", [])[:15],
-                    descriptions=result.get("descriptions", [])[:4]
-                ).model_dump()
-                
-                logger.info(f"✅ Claude generated copy for {theme}")
-                
-            except Exception as e:
-                logger.error(f"❌ Claude error: {str(e)}")
-                if 'response_text' in locals():
-                    logger.error(f"Claude response: {response_text[:500]}")
+                }
+            ]
+        )
+        
+        # Extract the response text
+        response_text = message.content[0].text if message.content else ""
+        
+        # Log the raw response for debugging
+        logger.info(f"Claude raw response length: {len(response_text)} chars")
+        
+        # Try to extract JSON from the response
+        try:
+            result = json.loads(response_text)
+        except json.JSONDecodeError:
+            # If that fails, look for JSON within the text
+            json_match = re.search(r'\{.*\}', response_text, re.DOTALL)
+            if json_match:
+                result = json.loads(json_match.group())
+            else:
+                raise ValueError("No valid JSON found in Claude's response")
+        
+        # Validate and store the results
+        variations["claude"] = AdCopyVariation(
+            headlines=result.get("headlines", [])[:15],
+            descriptions=result.get("descriptions", [])[:4]
+        ).model_dump()
+        
+        logger.info(f"✅ Claude generated copy for {theme}")
+        
+    except Exception as e:
+        logger.error(f"❌ Claude error: {str(e)}")
+        if 'response_text' in locals():
+            logger.error(f"Claude response (first 500 chars): {response_text[:500]}")
         
         if variations:
             ad_copies[theme] = variations
