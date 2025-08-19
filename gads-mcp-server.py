@@ -1030,7 +1030,7 @@ async def generate_ad_copy(
                 prompt = f"""
 Create Google Ads copy for {theme} theme.
 Keywords: {', '.join(top_keywords)}
-{'Context: ' + content[:500] if content else ''}
+{'Context: ' + content[:5000] if content else ''}
 
 Requirements:
 - 15 headlines: Each MUST be 15-30 characters
@@ -1151,7 +1151,7 @@ Respond in this JSON structure (no markdown or additional commentary):
                 user_prompt = f"""
 Create Google Ads copy for {theme} theme.
 Keywords: {', '.join(top_keywords)}
-{'Context: ' + content[:500] if content else ''}
+{'Context: ' + content[:5000] if content else ''}
 
 Requirements:
 - 15 headlines: Each MUST be 15-30 characters
@@ -1180,7 +1180,7 @@ Requirements:
                 )
                 
                 # Extract the response text
-                response_text = message.content[0].text if message.content else ""
+                response_text = print(message.content)[0].text if message.content else ""
                 
                 # Log the raw response for debugging
                 logger.info(f"Claude raw response length: {len(response_text)} chars")
