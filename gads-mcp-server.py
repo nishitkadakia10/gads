@@ -1116,9 +1116,7 @@ Requirements:
             try:
                 logger.info(f"🔍 Attempting Claude API call for theme: {theme}")
                 logger.info(f"📊 API Key present: {bool(ANTHROPIC_API_KEY)}")
-                logger.info(f"📊 API Key prefix: {ANTHROPIC_API_KEY[:10]}..." if
-          ANTHROPIC_API_KEY else "None")
-                logger.info(f"📊 User prompt length: {len(user_prompt)} chars")
+                logger.info(f"📊 API Key prefix: {ANTHROPIC_API_KEY[:10]}..." if ANTHROPIC_API_KEY else "None")
                 
                 # Build the user prompt
                 prompt = f"""
@@ -1134,22 +1132,53 @@ Requirements:
 - Highlight benefits and value
 """
                 
+                logger.info(f"📊 User prompt length: {len(prompt)} chars")
+                
+                # Fixed system prompt (removed escaped newlines)
+                system_prompt = """Write compelling, concise Google Ads copy to maximize engagement and conversions.
+- Objective: Produce advertising text for Google Ads campaigns, adhering to best practices for keyword integration, call-to-action (CTA), and value proposition.
+- Requirements:
+  - Provide exactly 15 unique headlines (each 15-30 characters; mandatory character limit).
+  - Provide exactly 4 unique descriptions (each 80-90 characters; mandatory character limit).
+  - Each headline and description must:
+    - Naturally incorporate relevant keywords.
+    - Include a strong CTA.
+    - Clearly highlight the core benefits and unique value of the product/service.
+- Ensure copy is engaging, avoids repetition, and stands out competitively.
+- Only output the requested items—do not include explanations or additional content.
+
+**Output Format:**
+Respond in this JSON structure (no markdown or additional commentary):
+{
+  "headlines": [
+    "[headline1: 15-30 chars]",
+    "...",
+    "[headline15: 15-30 chars]"
+  ],
+  "descriptions": [
+    "[description1: 80-90 chars]",
+    "...",
+    "[description4: 80-90 chars]"
+  ]
+}"""
+                
                 response = anthropic_client.messages.create(
                     model="claude-opus-4-1-20250805",
                     max_tokens=5000,
                     temperature=0.3,
-                    system="Write compelling, concise Google Ads copy to maximize engagement and conversions.\\n- Objective: Produce advertising text for Google Ads campaigns, adhering to best practices for keyword integration, call-to-action (CTA), and value proposition.\\n- Requirements:\\n  - Provide exactly 15 unique headlines (each 15-30 characters; mandatory character limit).\\n  - Provide exactly 4 unique descriptions (each 80-90 characters; mandatory character limit).\\n  - Each headline and description must:\\n    - Naturally incorporate relevant keywords.\\n    - Include a strong CTA.\\n    - Clearly highlight the core benefits and unique value of the product/service.\\n- Ensure copy is engaging, avoids repetition, and stands out competitively.\\n- Only output the requested items—do not include explanations or additional content.\\n- Reasoning Order:\\n  - First, plan main product/service benefits, value, and potential keywords.\\n  - Next, internally consider how to fit those elements naturally into short headlines and precise descriptions.\\n  - Only after reasoning, generate the finalized ad copy content as requested.\\n- Persistence: If you cannot generate enough outputs that meet all constraints, repeat your process and revise until all requirements are fully met before finalizing the answer.\\n\\n**Output Format:**\\nRespond in this JSON structure (no markdown or additional commentary):\\n{\\n  \\\"headlines\\\": [\\n    \\\"[headline1: 15-30 chars]\\\",\\n    \\\"...\\\",\\n    \\\"[headline15: 15-30 chars]\\\"\\n  ],\\n  \\\"descriptions\\\": [\\n    \\\"[description1: 80-90 chars]\\\",\\n    \\\"...\\\",\\n    \\\"[description4: 80-90 chars]\\\"\\n  ]\\n}",
+                    system=system_prompt,
                     messages=[
                         {
                             "role": "user",
                             "content": prompt
-                                }
-                            ]
+                        }
+                    ]
                 )
+                
                 logger.info("✅ Claude call successful")
                 
-                # FIX: Remove print() - it returns None!
-                response_text = response.content[0].text if message.content else ""
+                # FIX: Changed 'message.content' to 'response.content'
+                response_text = response.content[0].text if response.content else ""
                 
                 # Log the raw response for debugging
                 logger.info(f"Claude raw response length: {len(response_text)} chars")
