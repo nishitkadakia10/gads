@@ -1168,7 +1168,12 @@ Requirements:
                     messages=[
                         {
                             "role": "user",
-                            "content": user_prompt  # Simplified - just pass the string directly
+                            "content": [
+                                {
+                                    "type": "text",
+                                    "text": user_prompt
+                                }
+                            ]
                         }
                     ]
                 )
