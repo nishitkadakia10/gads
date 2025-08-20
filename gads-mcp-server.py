@@ -1121,10 +1121,11 @@ Requirements:
                 logger.info(f"📊 User prompt length: {len(user_prompt)} chars")
                 
                 # Build the user prompt
-                user_prompt = f"""
+                prompt = f"""
 Create Google Ads copy for {theme} theme.
 Keywords: {', '.join(top_keywords)}
 {'Context: ' + content[:5000] if content else ''}
+
 Requirements:
 - 15 headlines: Each MUST be 15-30 characters
 - 4 descriptions: Each MUST be 80-90 characters
@@ -1133,7 +1134,7 @@ Requirements:
 - Highlight benefits and value
 """
                 
-                message = anthropic_client.messages.create(
+                response = anthropic_client.messages.create(
                     model="claude-opus-4-1-20250805",
                     max_tokens=5000,
                     temperature=0.3,
@@ -1141,19 +1142,14 @@ Requirements:
                     messages=[
                         {
                             "role": "user",
-                            "content": [
-                                {
-                                    "type": "text",
-                                    "text": user_prompt
+                            "content": prompt
                                 }
                             ]
-                        }
-                    ]
                 )
                 logger.info("✅ Claude call successful")
                 
                 # FIX: Remove print() - it returns None!
-                response_text = message.content[0].text if message.content else ""
+                response_text = response.content[0].text if message.content else ""
                 
                 # Log the raw response for debugging
                 logger.info(f"Claude raw response length: {len(response_text)} chars")
