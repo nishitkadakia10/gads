@@ -1113,13 +1113,13 @@ Requirements:
                 
         # Generate with Claude
         if anthropic_client:
-            try:
-                logger.info(f"🔍 Attempting Claude API call for theme: {theme}")
-                logger.info(f"📊 API Key present: {bool(ANTHROPIC_API_KEY)}")
-                logger.info(f"📊 API Key prefix: {ANTHROPIC_API_KEY[:10]}..." if ANTHROPIC_API_KEY else "None")
-                
-                # Build the user prompt
-                prompt = f"""
+    try:
+        logger.info(f"🔍 Attempting Claude API call for theme: {theme}")
+        logger.info(f"📊 API Key present: {bool(ANTHROPIC_API_KEY)}")
+        logger.info(f"📊 API Key prefix: {ANTHROPIC_API_KEY[:10]}..." if ANTHROPIC_API_KEY else "None")
+        
+        # Build the user prompt
+        prompt = f"""
 Create Google Ads copy for {theme} theme.
 Keywords: {', '.join(top_keywords)}
 {'Context: ' + content[:5000] if content else ''}
@@ -1131,11 +1131,11 @@ Requirements:
 - Strong call-to-action
 - Highlight benefits and value
 """
-                
-                logger.info(f"📊 User prompt length: {len(prompt)} chars")
-                
-                # Fixed system prompt (removed escaped newlines)
-                system_prompt = """Write compelling, concise Google Ads copy to maximize engagement and conversions.
+        
+        logger.info(f"📊 User prompt length: {len(prompt)} chars")
+        
+        # Fixed system prompt (removed escaped newlines)
+        system_prompt = """Write compelling, concise Google Ads copy to maximize engagement and conversions.
 - Objective: Produce advertising text for Google Ads campaigns, adhering to best practices for keyword integration, call-to-action (CTA), and value proposition.
 - Requirements:
   - Provide exactly 15 unique headlines (each 15-30 characters; mandatory character limit).
@@ -1161,54 +1161,69 @@ Respond in this JSON structure (no markdown or additional commentary):
     "[description4: 80-90 chars]"
   ]
 }"""
-                
-                response = anthropic_client.messages.create(
-                    model="claude-opus-4-1-20250805",
-                    max_tokens=5000,
-                    temperature=0.3,
-                    system=system_prompt,
-                    messages=[
-                        {
-                            "role": "user",
-                            "content": prompt
-                        }
-                    ]
-                )
-                
-                logger.info("✅ Claude call successful")
-                
-                # FIX: Changed 'message.content' to 'response.content'
-                response_text = response.content[0].text if response.content else ""
-                
-                # Log the raw response for debugging
-                logger.info(f"Claude raw response length: {len(response_text)} chars")
-                
-                # Remove markdown if present
-                response_text = response_text.replace("```json", "").replace("```", "").strip()
-                
-                # Try to extract JSON from the response
-                try:
-                    result = json.loads(response_text)
-                except json.JSONDecodeError:
-                    # If that fails, look for JSON within the text
-                    json_match = re.search(r'\{.*\}', response_text, re.DOTALL)
-                    if json_match:
-                        result = json.loads(json_match.group())
-                    else:
-                        raise ValueError("No valid JSON found in Claude's response")
-                
-                # Validate and store the results
-                variations["claude"] = AdCopyVariation(
-                    headlines=result.get("headlines", [])[:15],
-                    descriptions=result.get("descriptions", [])[:4]
-                ).model_dump()
-                
-                logger.info(f"✅ Claude generated copy for {theme}")
-                
-            except Exception as e:
-                logger.error(f"❌ Claude error: {str(e)}")
-                if 'response_text' in locals():
-                    logger.error(f"Claude response (first 5000 chars): {response_text[:5000]}")
+        
+        # Initialize response_text before the API call
+        response_text = ""
+        
+        try:
+            response = anthropic_client.messages.create(
+                model="claude-opus-4-1-20250805",
+                max_tokens=5000,
+                temperature=0.3,
+                system=system_prompt,
+                messages=[
+                    {
+                        "role": "user",
+                        "content": prompt
+                    }
+                ]
+            )
+            
+            logger.info("✅ Claude call successful")
+            
+            # Extract response text
+            response_text = response.content[0].text if response.content else ""
+            
+            # Log the raw response for debugging
+            logger.info(f"Claude raw response length: {len(response_text)} chars")
+            
+        except Exception as api_error:
+            # Log the specific API error
+            logger.error(f"❌ Claude API call failed: {str(api_error)}")
+            # Don't process further if API call failed
+            raise api_error
+        
+        # Only process response if we got one
+        if response_text:
+            # Remove markdown if present
+            response_text = response_text.replace("```json", "").replace("```", "").strip()
+            
+            # Try to extract JSON from the response
+            try:
+                result = json.loads(response_text)
+            except json.JSONDecodeError:
+                # If that fails, look for JSON within the text
+                json_match = re.search(r'\{.*\}', response_text, re.DOTALL)
+                if json_match:
+                    result = json.loads(json_match.group())
+                else:
+                    raise ValueError("No valid JSON found in Claude's response")
+            
+            # Validate and store the results
+            variations["claude"] = AdCopyVariation(
+                headlines=result.get("headlines", [])[:15],
+                descriptions=result.get("descriptions", [])[:4]
+            ).model_dump()
+            
+            logger.info(f"✅ Claude generated copy for {theme}")
+        else:
+            logger.warning(f"⚠️ No response text from Claude for {theme}")
+            
+    except Exception as e:
+        logger.error(f"❌ Claude error for {theme}: {str(e)}")
+        # Only show response text if we actually have it and it's not empty
+        if 'response_text' in locals() and response_text:
+            logger.debug(f"Claude response (first 500 chars): {response_text[:500]}")
         
         if variations:
             ad_copies[theme] = variations
