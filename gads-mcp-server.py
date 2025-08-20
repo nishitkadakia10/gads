@@ -1114,6 +1114,11 @@ Requirements:
         # Generate with Claude
         if anthropic_client:
             try:
+                logger.info(f"🔍 Attempting Claude API call for theme: {theme}")
+                logger.info(f"📊 API Key present: {bool(ANTHROPIC_API_KEY)}")
+                logger.info(f"📊 API Key prefix: {ANTHROPIC_API_KEY[:10]}..." if
+          ANTHROPIC_API_KEY else "None")
+                logger.info(f"📊 User prompt length: {len(user_prompt)} chars")
                 # Build the system prompt with proper formatting
                 system_prompt = """Write compelling, concise Google Ads copy to maximize engagement and conversions.
 - Objective: Produce advertising text for Google Ads campaigns, adhering to best practices for keyword integration, call-to-action (CTA), and value proposition.
@@ -1170,7 +1175,7 @@ Requirements:
                             "content": [
                                 {
                                     "type": "text",
-                                    "text": "user_prompt"
+                                    "text": user_prompt
                                 }
                             ]
                         }
