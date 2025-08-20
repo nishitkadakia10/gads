@@ -1160,7 +1160,7 @@ Requirements:
 """
                 
                 message = anthropic_client.messages.create(
-                    model="claude-sonnet-4-20250514",
+                    model="claude-4-sonnet-20250514",
                     max_tokens=5000,
                     temperature=0.3,
                     system=system_prompt,
