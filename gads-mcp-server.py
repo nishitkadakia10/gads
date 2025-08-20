@@ -1119,37 +1119,6 @@ Requirements:
                 logger.info(f"📊 API Key prefix: {ANTHROPIC_API_KEY[:10]}..." if
           ANTHROPIC_API_KEY else "None")
                 logger.info(f"📊 User prompt length: {len(user_prompt)} chars")
-                # Build the system prompt with proper formatting
-                system_prompt = """Write compelling, concise Google Ads copy to maximize engagement and conversions.
-- Objective: Produce advertising text for Google Ads campaigns, adhering to best practices for keyword integration, call-to-action (CTA), and value proposition.
-- Requirements:
-  - Provide exactly 15 unique headlines (each 15-30 characters; mandatory character limit).
-  - Provide exactly 4 unique descriptions (each 80-90 characters; mandatory character limit).
-  - Each headline and description must:
-    - Naturally incorporate relevant keywords.
-    - Include a strong CTA.
-    - Clearly highlight the core benefits and unique value of the product/service.
-- Ensure copy is engaging, avoids repetition, and stands out competitively.
-- Only output the requested items—do not include explanations or additional content.
-- Reasoning Order:
-  - First, plan main product/service benefits, value, and potential keywords.
-  - Next, internally consider how to fit those elements naturally into short headlines and precise descriptions.
-  - Only after reasoning, generate the finalized ad copy content as requested.
-- Persistence: If you cannot generate enough outputs that meet all constraints, repeat your process and revise until all requirements are fully met before finalizing the answer.
-**Output Format:**
-Respond in this JSON structure (no markdown or additional commentary):
-{
-  "headlines": [
-    "[headline1: 15-30 chars]",
-    "...",
-    "[headline15: 15-30 chars]"
-  ],
-  "descriptions": [
-    "[description1: 80-90 chars]",
-    "...",
-    "[description4: 80-90 chars]"
-  ]
-}"""
                 
                 # Build the user prompt
                 user_prompt = f"""
@@ -1165,10 +1134,10 @@ Requirements:
 """
                 
                 message = anthropic_client.messages.create(
-                    model="claude-4-sonnet-20250514",
+                    model="claude-opus-4-1-20250805",
                     max_tokens=5000,
                     temperature=0.3,
-                    system=system_prompt,
+                    system="Write compelling, concise Google Ads copy to maximize engagement and conversions.\\n- Objective: Produce advertising text for Google Ads campaigns, adhering to best practices for keyword integration, call-to-action (CTA), and value proposition.\\n- Requirements:\\n  - Provide exactly 15 unique headlines (each 15-30 characters; mandatory character limit).\\n  - Provide exactly 4 unique descriptions (each 80-90 characters; mandatory character limit).\\n  - Each headline and description must:\\n    - Naturally incorporate relevant keywords.\\n    - Include a strong CTA.\\n    - Clearly highlight the core benefits and unique value of the product/service.\\n- Ensure copy is engaging, avoids repetition, and stands out competitively.\\n- Only output the requested items—do not include explanations or additional content.\\n- Reasoning Order:\\n  - First, plan main product/service benefits, value, and potential keywords.\\n  - Next, internally consider how to fit those elements naturally into short headlines and precise descriptions.\\n  - Only after reasoning, generate the finalized ad copy content as requested.\\n- Persistence: If you cannot generate enough outputs that meet all constraints, repeat your process and revise until all requirements are fully met before finalizing the answer.\\n\\n**Output Format:**\\nRespond in this JSON structure (no markdown or additional commentary):\\n{\\n  \\\"headlines\\\": [\\n    \\\"[headline1: 15-30 chars]\\\",\\n    \\\"...\\\",\\n    \\\"[headline15: 15-30 chars]\\\"\\n  ],\\n  \\\"descriptions\\\": [\\n    \\\"[description1: 80-90 chars]\\\",\\n    \\\"...\\\",\\n    \\\"[description4: 80-90 chars]\\\"\\n  ]\\n}",
                     messages=[
                         {
                             "role": "user",
