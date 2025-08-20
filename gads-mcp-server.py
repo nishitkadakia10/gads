@@ -1110,11 +1110,13 @@ Requirements:
                 logger.error(f"GPT response (first 500 chars): {response_text[:500]}")
             except Exception as e:
                 logger.error(f"❌ OpenAI error: {str(e)}")
-        
-        # Generate with Claude
+    1
         # Generate with Claude
         if anthropic_client:
             try:
+                logger.info(f"🔍 Attempting Claude API call...")
+                logger.info(f"API Key present: {bool(ANTHROPIC_API_KEY)}")
+                logger.info(f"API Key length: {len(ANTHROPIC_API_KEY) if ANTHROPIC_API_KEY else 0}")
                 # Build the system prompt with proper formatting
                 system_prompt = """Write compelling, concise Google Ads copy to maximize engagement and conversions.
 - Objective: Produce advertising text for Google Ads campaigns, adhering to best practices for keyword integration, call-to-action (CTA), and value proposition.
@@ -1161,22 +1163,18 @@ Requirements:
 """
                 
                 message = anthropic_client.messages.create(
-                    model="claude-opus-4-1-20250805",
+                    model="claude-sonnet-4-20250514",
                     max_tokens=5000,
                     temperature=0.3,
                     system=system_prompt,
                     messages=[
                         {
                             "role": "user",
-                            "content": [
-                                {
-                                    "type": "text",
-                                    "text": user_prompt
-                                }
-                            ]
+                            "content": user_prompt
                         }
                     ]
                 )
+                logger.info("✅ Claude call successful")
                 
                 # FIX: Remove print() - it returns None!
                 response_text = message.content[0].text if message.content else ""
