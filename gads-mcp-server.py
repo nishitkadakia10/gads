@@ -1169,7 +1169,7 @@ Requirements:
                             "role": "user",
                             "content": [
                                 {
-                                    "type": "text"
+                                    "type": "text",
                                     "text": "user_prompt"
                                 }
                             ]
