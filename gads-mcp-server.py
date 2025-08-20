@@ -1167,7 +1167,12 @@ Requirements:
                     messages=[
                         {
                             "role": "user",
-                            "content": user_prompt
+                            "content": [
+                                {
+                                    "type": "text"
+                                    "text": "user_prompt"
+                                }
+                            ]
                         }
                     ]
                 )
@@ -1204,7 +1209,7 @@ Requirements:
             except Exception as e:
                 logger.error(f"❌ Claude error: {str(e)}")
                 if 'response_text' in locals():
-                    logger.error(f"Claude response (first 500 chars): {response_text[:500]}")
+                    logger.error(f"Claude response (first 5000 chars): {response_text[:5000]}")
         
         if variations:
             ad_copies[theme] = variations
