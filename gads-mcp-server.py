@@ -1167,7 +1167,7 @@ Requirements:
         
                 try:
                     response = anthropic_client.messages.create(
-                        model="claude-opus-4-1-20250805",  # or "claude-opus-4-1" if snapshots aren't enabled
+                        model="claude-opus-4-1",  # or "claude-opus-4-1" if snapshots aren't enabled
                         max_tokens=5000,
                         temperature=0.3,
                         system=system_prompt,
