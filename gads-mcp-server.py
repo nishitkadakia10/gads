@@ -1024,7 +1024,6 @@ async def generate_ad_copy(
         variations = {}
         
         # Generate with OpenAI (structured output)
-        # Generate with OpenAI (structured output)
         if openai_client:
             try:
                 prompt = f"""
@@ -1112,13 +1111,14 @@ Requirements:
                 logger.error(f"❌ OpenAI error: {str(e)}")
             
         # Generate with Claude
+
         if anthropic_client:
             try:
                 logger.info(f"🔍 Attempting Claude API call for theme: {theme}")
                 logger.info(f"📊 API Key present: {bool(ANTHROPIC_API_KEY)}")
                 logger.info(f"📊 API Key prefix: {ANTHROPIC_API_KEY[:10]}..." if ANTHROPIC_API_KEY else "None")
-
-        # Build the user prompt
+        
+                # Build the user prompt
                 prompt = f"""
         Create Google Ads copy for {theme} theme.
         Keywords: {', '.join(top_keywords or [])}
@@ -1131,10 +1131,10 @@ Requirements:
         - Strong call-to-action
         - Highlight benefits and value
         """
-
+        
                 logger.info(f"📊 User prompt length: {len(prompt)} chars")
         
-                # Fixed system prompt (removed escaped newlines)
+                # Fixed system prompt
                 system_prompt = """Write compelling, concise Google Ads copy to maximize engagement and conversions.
         - Objective: Produce advertising text for Google Ads campaigns, adhering to best practices for keyword integration, call-to-action (CTA), and value proposition.
         - Requirements:
@@ -1167,8 +1167,8 @@ Requirements:
         
                 try:
                     response = anthropic_client.messages.create(
-                        model="claude-opus-4-1",  # or "claude-opus-4-1" if snapshots aren't enabled
-                        max_tokens=5000,
+                        model="claude-opus-4-1-20250805",  # Use a valid model string
+                        max_tokens=2000,
                         temperature=0.3,
                         system=system_prompt,
                         messages=[{"role": "user", "content": prompt}],
@@ -1193,7 +1193,7 @@ Requirements:
                     except Exception as _:
                         logger.debug("Claude response type=%s", type(response))
         
-                    # Aggregate ALL text blocks (don't assume index 0 is text)
+                    # Aggregate ALL text blocks
                     text_chunks = []
                     for block in getattr(response, "content", None) or []:
                         btype = getattr(block, "type", None) or (block.get("type") if isinstance(block, dict) else None)
@@ -1215,7 +1215,6 @@ Requirements:
         
                 # Helper to extract the first balanced top-level JSON object from arbitrary text
                 def extract_top_level_json(text: str):
-                    import json as _json
                     start = text.find("{")
                     while start != -1:
                         depth = 0
@@ -1242,8 +1241,8 @@ Requirements:
                                     if depth == 0:
                                         candidate = text[start : i + 1]
                                         try:
-                                            return _json.loads(candidate)
-                                        except _json.JSONDecodeError:
+                                            return json.loads(candidate)
+                                        except json.JSONDecodeError:
                                             break  # try next '{'
                         start = text.find("{", start + 1)
                     return None
@@ -1253,7 +1252,6 @@ Requirements:
                     # Remove markdown fences if present
                     response_text = response_text.replace("```json", "").replace("```", "").strip()
         
-                    import json
                     result = None
         
                     # Try strict JSON first
@@ -1283,11 +1281,14 @@ Requirements:
                 else:
                     logger.warning(f"⚠️ No response text from Claude for {theme}")
         
-            except Exception as e:
-                logger.error(f"❌ Claude error for {theme}: {str(e)}")
-                # Only show response text if we actually have it and it's not empty
+            except json.JSONDecodeError as e:  # Now json is always defined
+                logger.error(f"❌ JSON decode error for {theme}: {str(e)}")
                 if 'response_text' in locals() and response_text:
                     logger.debug(f"Claude response (first 500 chars): {response_text[:500]}")
+            except Exception as e:
+                logger.error(f"❌ Claude error for {theme}: {str(e)}")
+                if 'response_text' in locals() and response_text:
+                    logger.debug(f"Claude response (first 5000 chars): {response_text[:5000]}")
         
         if variations:
             ad_copies[theme] = variations
