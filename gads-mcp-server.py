@@ -1117,108 +1117,172 @@ Requirements:
                 logger.info(f"🔍 Attempting Claude API call for theme: {theme}")
                 logger.info(f"📊 API Key present: {bool(ANTHROPIC_API_KEY)}")
                 logger.info(f"📊 API Key prefix: {ANTHROPIC_API_KEY[:10]}..." if ANTHROPIC_API_KEY else "None")
-                
-                # Build the user prompt
-                prompt = f"""
-Create Google Ads copy for {theme} theme.
-Keywords: {', '.join(top_keywords)}
-{'Context: ' + content[:5000] if content else ''}
 
-Requirements:
-- 15 headlines: Each MUST be 15-30 characters
-- 4 descriptions: Each MUST be 80-90 characters
-- Include keywords naturally
-- Strong call-to-action
-- Highlight benefits and value
-"""
-                
+        # Build the user prompt
+                prompt = f"""
+        Create Google Ads copy for {theme} theme.
+        Keywords: {', '.join(top_keywords or [])}
+        {'Context: ' + content[:5000] if content else ''}
+        
+        Requirements:
+        - 15 headlines: Each MUST be 15-30 characters
+        - 4 descriptions: Each MUST be 80-90 characters
+        - Include keywords naturally
+        - Strong call-to-action
+        - Highlight benefits and value
+        """
+
                 logger.info(f"📊 User prompt length: {len(prompt)} chars")
-                
+        
                 # Fixed system prompt (removed escaped newlines)
                 system_prompt = """Write compelling, concise Google Ads copy to maximize engagement and conversions.
-- Objective: Produce advertising text for Google Ads campaigns, adhering to best practices for keyword integration, call-to-action (CTA), and value proposition.
-- Requirements:
-  - Provide exactly 15 unique headlines (each 15-30 characters; mandatory character limit).
-  - Provide exactly 4 unique descriptions (each 80-90 characters; mandatory character limit).
-  - Each headline and description must:
-    - Naturally incorporate relevant keywords.
-    - Include a strong CTA.
-    - Clearly highlight the core benefits and unique value of the product/service.
-- Ensure copy is engaging, avoids repetition, and stands out competitively.
-- Only output the requested items—do not include explanations or additional content.
-
-**Output Format:**
-Respond in this JSON structure (no markdown or additional commentary):
-{
-  "headlines": [
-    "[headline1: 15-30 chars]",
-    "...",
-    "[headline15: 15-30 chars]"
-  ],
-  "descriptions": [
-    "[description1: 80-90 chars]",
-    "...",
-    "[description4: 80-90 chars]"
-  ]
-}"""
-                
+        - Objective: Produce advertising text for Google Ads campaigns, adhering to best practices for keyword integration, call-to-action (CTA), and value proposition.
+        - Requirements:
+          - Provide exactly 15 unique headlines (each 15-30 characters; mandatory character limit).
+          - Provide exactly 4 unique descriptions (each 80-90 characters; mandatory character limit).
+          - Each headline and description must:
+            - Naturally incorporate relevant keywords.
+            - Include a strong CTA.
+            - Clearly highlight the core benefits and unique value of the product/service.
+        - Ensure copy is engaging, avoids repetition, and stands out competitively.
+        - Only output the requested items—do not include explanations or additional content.
+        
+        **Output Format:**
+        Respond in this JSON structure (no markdown or additional commentary):
+        {
+          "headlines": [
+            "[headline1: 15-30 chars]",
+            "...",
+            "[headline15: 15-30 chars]"
+          ],
+          "descriptions": [
+            "[description1: 80-90 chars]",
+            "...",
+            "[description4: 80-90 chars]"
+          ]
+        }"""
+        
                 # Initialize response_text before the API call
                 response_text = ""
-                
+        
                 try:
                     response = anthropic_client.messages.create(
-                        model="claude-opus-4-1-20250805",
+                        model="claude-opus-4-1-20250805",  # or "claude-opus-4-1" if snapshots aren't enabled
                         max_tokens=5000,
                         temperature=0.3,
                         system=system_prompt,
-                        messages=[
-                            {
-                                "role": "user",
-                                "content": prompt
-                            }
-                        ]
+                        messages=[{"role": "user", "content": prompt}],
                     )
-                    
+        
                     logger.info("✅ Claude call successful")
-                    
-                    # Extract response text
-                    response_text = response.content[0].text if response.content else ""
-                    
+        
+                    # Optional: log a compact structural summary for debugging
+                    try:
+                        raw = response.model_dump()  # anthropic >= 0.30
+                        content_blocks = raw.get("content", [])
+                        block_types = [
+                            (cb.get("type") if isinstance(cb, dict) else getattr(cb, "type", None))
+                            for cb in (content_blocks or [])
+                        ]
+                        logger.debug(
+                            "Claude struct: stop_reason=%s, block_count=%s, block_types=%s",
+                            raw.get("stop_reason"),
+                            len(content_blocks or []),
+                            block_types,
+                        )
+                    except Exception as _:
+                        logger.debug("Claude response type=%s", type(response))
+        
+                    # Aggregate ALL text blocks (don't assume index 0 is text)
+                    text_chunks = []
+                    for block in getattr(response, "content", None) or []:
+                        btype = getattr(block, "type", None) or (block.get("type") if isinstance(block, dict) else None)
+                        if btype == "text":
+                            txt = getattr(block, "text", None) or (block.get("text") if isinstance(block, dict) else None)
+                            if txt:
+                                text_chunks.append(txt)
+        
+                    response_text = "".join(text_chunks).strip()
+        
                     # Log the raw response for debugging
                     logger.info(f"Claude raw response length: {len(response_text)} chars")
-                    
+        
                 except Exception as api_error:
                     # Log the specific API error
                     logger.error(f"❌ Claude API call failed: {str(api_error)}")
                     # Don't process further if API call failed
                     raise api_error
-                
+        
+                # Helper to extract the first balanced top-level JSON object from arbitrary text
+                def extract_top_level_json(text: str):
+                    import json as _json
+                    start = text.find("{")
+                    while start != -1:
+                        depth = 0
+                        in_string = False
+                        escape = False
+                        for i in range(start, len(text)):
+                            ch = text[i]
+                            if in_string:
+                                if escape:
+                                    escape = False
+                                elif ch == "\\":
+                                    escape = True
+                                elif ch == '"':
+                                    in_string = False
+                                continue
+                            else:
+                                if ch == '"':
+                                    in_string = True
+                                    continue
+                                if ch == "{":
+                                    depth += 1
+                                elif ch == "}":
+                                    depth -= 1
+                                    if depth == 0:
+                                        candidate = text[start : i + 1]
+                                        try:
+                                            return _json.loads(candidate)
+                                        except _json.JSONDecodeError:
+                                            break  # try next '{'
+                        start = text.find("{", start + 1)
+                    return None
+        
                 # Only process response if we got one
                 if response_text:
-                    # Remove markdown if present
+                    # Remove markdown fences if present
                     response_text = response_text.replace("```json", "").replace("```", "").strip()
-                    
-                    # Try to extract JSON from the response
+        
+                    import json
+                    result = None
+        
+                    # Try strict JSON first
                     try:
                         result = json.loads(response_text)
                     except json.JSONDecodeError:
-                        # If that fails, look for JSON within the text
-                        json_match = re.search(r'\{.*\}', response_text, re.DOTALL)
-                        if json_match:
-                            result = json.loads(json_match.group())
-                        else:
-                            raise ValueError("No valid JSON found in Claude's response")
-                    
+                        # Fallback: balanced top-level object extraction
+                        result = extract_top_level_json(response_text)
+        
+                    if not result:
+                        snippet = response_text[:300].replace("\n", " ")
+                        raise ValueError(f"No valid JSON found in Claude's response. First 300 chars: {snippet!r}")
+        
                     # Validate and store the results
+                    headlines = result.get("headlines", [])
+                    descriptions = result.get("descriptions", [])
+        
+                    if not isinstance(headlines, list) or not isinstance(descriptions, list):
+                        raise ValueError("Invalid JSON shape: 'headlines' and 'descriptions' must be arrays.")
+        
                     variations["claude"] = AdCopyVariation(
-                        headlines=result.get("headlines", [])[:15],
-                        descriptions=result.get("descriptions", [])[:4]
+                        headlines=headlines[:15],
+                        descriptions=descriptions[:4]
                     ).model_dump()
-                    
+        
                     logger.info(f"✅ Claude generated copy for {theme}")
                 else:
                     logger.warning(f"⚠️ No response text from Claude for {theme}")
-                    
+        
             except Exception as e:
                 logger.error(f"❌ Claude error for {theme}: {str(e)}")
                 # Only show response text if we actually have it and it's not empty
